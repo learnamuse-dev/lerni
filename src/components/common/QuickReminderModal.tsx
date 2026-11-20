@@ -13,7 +13,6 @@ interface QuickReminderModalProps {
   itemType: 'task' | 'event' | 'habit';
   targetTime?: string;
   targetDate?: string;
-  itemId?: string;
   reminders: EntryReminder[];
   onSave: (reminders: EntryReminder[]) => void;
 }
@@ -25,7 +24,6 @@ export const QuickReminderModal: React.FC<QuickReminderModalProps> = ({
   itemType,
   targetTime,
   targetDate,
-  itemId,
   reminders = [],
   onSave,
 }) => {
@@ -93,8 +91,6 @@ export const QuickReminderModal: React.FC<QuickReminderModalProps> = ({
             targetTime={targetTime}
             targetDate={targetDate}
             itemType={itemType}
-            itemTitle={title}
-            itemId={itemId}
           />
         </div>
 

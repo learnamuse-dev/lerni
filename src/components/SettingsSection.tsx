@@ -49,8 +49,6 @@ import {
   ChevronsUpDown,
   Smartphone,
   Bell,
-  CalendarPlus,
-  Share2,
 } from 'lucide-react';
 import {
   UserPreferences,
@@ -90,7 +88,6 @@ import {
   startStrongReminderInSW,
   dispatchBrowserNotification,
 } from '../utils/reminderManager';
-import { exportAllRemindersToIcs, PhoneReminderItem } from '../utils/phoneReminderSync';
 
 interface SettingsSectionProps {
   prefs: UserPreferences;
@@ -412,64 +409,6 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({
     } finally {
       setIsTestingNotif(false);
     }
-  };
-
-  const [phoneExportStatus, setPhoneExportStatus] = useState<string | null>(null);
-
-  const handleExportAllToPhone = () => {
-    soundEngine.playGentleChime();
-    const items: PhoneReminderItem[] = [];
-
-    // Gather tasks & events reminders
-    for (const entry of bujoEntries) {
-      if (entry.status !== 'open' || !entry.reminders || entry.reminders.length === 0) continue;
-      for (const rem of entry.reminders) {
-        if (rem.enabled === false) continue;
-        items.push({
-          id: `bujo-${entry.id}-${rem.id}`,
-          title: entry.content,
-          date: entry.date,
-          time: entry.time || '09:00',
-          offsetMinutes: rem.offsetMinutes,
-          intensity: rem.intensity || 'normal',
-        });
-      }
-    }
-
-    // Gather habit reminders for today
-    const todayStr = getTodayDateString();
-    for (const habit of habits) {
-      if (habit.isArchived || !habit.reminders || habit.reminders.length === 0) continue;
-      for (const rem of habit.reminders) {
-        if (rem.enabled === false) continue;
-        items.push({
-          id: `habit-${habit.id}-${rem.id}`,
-          title: habit.title,
-          date: todayStr,
-          time: habit.time || '09:00',
-          offsetMinutes: rem.offsetMinutes,
-          intensity: rem.intensity || 'normal',
-        });
-      }
-    }
-
-    if (items.length === 0) {
-      setPhoneExportStatus(
-        isDraftFa
-          ? 'یادآور فعالی برای خروجی یافت نشد.'
-          : 'No active reminders found to export.'
-      );
-      setTimeout(() => setPhoneExportStatus(null), 4000);
-      return;
-    }
-
-    exportAllRemindersToIcs(items);
-    setPhoneExportStatus(
-      isDraftFa
-        ? `${toPersianDigits(items.length)} یادآور با موفقیت در فایل تقویم (.ics) ذخیره شد! آن را باز کنید تا وارد تقویم یا Reminders گوشی شود.`
-        : `${items.length} reminders exported to .ics! Open the file to import into your phone's Reminders/Calendar.`
-    );
-    setTimeout(() => setPhoneExportStatus(null), 7000);
   };
 
   // Active language in current session and draft preview
@@ -3547,51 +3486,6 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({
                         />
                         <div className="w-9 h-5 bg-gray-300 dark:bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] rtl:after:left-auto rtl:after:right-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#80D141]"></div>
                       </label>
-                    </div>
-
-                    {/* Feature: Phone Reminders & Calendar Synchronization */}
-                    <div className="p-3.5 rounded-2xl bg-[#F7FAF4] dark:bg-[#1C2919] border border-[#DCEAD4] dark:border-[#2A3E26] space-y-3">
-                      <div className="flex items-start justify-between gap-3 flex-wrap">
-                        <div className="text-xs">
-                          <div className="font-bold text-[#151E14] dark:text-[#E8F2E4] flex items-center gap-1.5">
-                            <Smartphone className="w-4 h-4 text-[#3B7E10] dark:text-[#80D141]" />
-                            <span>{isDraftFa ? 'همگام‌سازی با برنامه یادآور و تقویم گوشی' : 'Phone Reminders & Calendar Sync'}</span>
-                          </div>
-                          <div className="text-[#485B44] dark:text-[#9EB598] text-[11px] mt-1 leading-relaxed">
-                            {isDraftFa
-                              ? 'می‌توانید یادآورهای لرنی را مستقیماً در برنامه‌های رسمی یادآور گوشی (مانند Apple Reminders در آیفون، یا Google Calendar و Samsung Reminders در اندروید) ایجاد کرده یا حذف کنید.'
-                              : 'Create, export, and remove Lerni reminders directly within your native phone apps (Apple Reminders & Calendar on iOS, Google Tasks & Calendar on Android).'}
-                          </div>
-                        </div>
-
-                        <button
-                          type="button"
-                          onClick={handleExportAllToPhone}
-                          className="px-3.5 py-1.5 rounded-xl bg-[#80D141] hover:bg-[#72BF36] text-[#0F2600] text-xs font-bold shadow-xs flex items-center gap-1.5 transition-transform active:scale-95 shrink-0 cursor-pointer"
-                          title="Export all active reminders to a calendar file for your phone"
-                        >
-                          <CalendarPlus className="w-3.5 h-3.5 stroke-[2.5]" />
-                          <span>{isDraftFa ? 'خروجی همه یادآورها برای گوشی (.ics)' : 'Export All to Phone (.ics)'}</span>
-                        </button>
-                      </div>
-
-                      <div className="p-2.5 rounded-xl bg-white dark:bg-[#202E1E] border border-[#DCEAD4] dark:border-[#2C4027] text-[11px] text-[#485B44] dark:text-[#9EB598] space-y-1.5 leading-relaxed">
-                        <div className="flex items-start gap-1.5">
-                          <span className="font-bold text-[#151E14] dark:text-[#E8F2E4] shrink-0">📲 {isDraftFa ? 'ایجاد یادآور در گوشی:' : 'Create in Phone:'}</span>
-                          <span>{isDraftFa ? 'در پنجره تنظیم هر وظیفه یا عادت، روی «افزودن به یادآور گوشی» یا «اشتراک با Reminders» بزنید تا بلافاصله با زنگ هشدار در گوشی ثبت شود.' : 'In any task or habit reminder popup, tap "Add to Phone (.ics)" or "Share to Reminders" to instantly register with native sound alarms.'}</span>
-                        </div>
-                        <div className="flex items-start gap-1.5">
-                          <span className="font-bold text-rose-700 dark:text-rose-300 shrink-0">🗑️ {isDraftFa ? 'حذف از برنامه گوشی:' : 'Remove from Phone:'}</span>
-                          <span>{isDraftFa ? 'روی هر مورد با زدن دکمه «حذف از گوشی (.ics)»، دستور لغو و پاک‌سازی رویداد برای تقویم و Reminders گوشی صادر می‌شود.' : 'Tap "Remove from Phone (.ics)" on any item to prompt your phone to delete and cancel the alarm.'}</span>
-                        </div>
-                      </div>
-
-                      {phoneExportStatus && (
-                        <div className="p-2 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-300 dark:border-emerald-800 text-[11px] font-bold text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5">
-                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
-                          <span>{phoneExportStatus}</span>
-                        </div>
-                      )}
                     </div>
 
                     {/* Today's Scheduled Reminders Summary */}
