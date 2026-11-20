@@ -139,6 +139,17 @@ export const TimeTracker: React.FC<TimeTrackerProps> = ({ setIsRunningToNav }) =
   const [projectToDelete, setProjectToDelete] = useState<Project | null>(null);
   const [logToDelete, setLogToDelete] = useState<TimeLog | null>(null);
 
+  useEffect(() => {
+    if (!isProjectModalOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !projectToDelete && !modalEditingTaskId) {
+        handleCloseProjectModal();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isProjectModalOpen, projectToDelete, modalEditingTaskId]);
+
   // Sync project modal state with app for FAB animation
   useEffect(() => {
     window.dispatchEvent(
@@ -1189,8 +1200,8 @@ export const TimeTracker: React.FC<TimeTrackerProps> = ({ setIsRunningToNav }) =
                 <button
                   type="button"
                   onClick={handleCloseProjectModal}
-                  className="p-2 -ml-2 rounded-xl text-[#485B44] dark:text-[#9EB598] hover:bg-[#EAEFE6] dark:hover:bg-[#1C281A] transition-colors flex items-center gap-1.5 font-medium text-sm cursor-pointer"
-                  aria-label={t('common.close', 'Close')}
+                  className="p-2 -ms-2 rounded-xl text-[#485B44] dark:text-[#9EB598] hover:bg-[#EAEFE6] dark:hover:bg-[#1C281A] transition-colors flex items-center gap-1.5 font-medium text-sm cursor-pointer"
+                  aria-label={t('common.back', 'Back')}
                 >
                   <ArrowLeft className="w-5 h-5 rtl:rotate-180" />
                   <span className="hidden sm:inline">{t('common.back', 'Back')}</span>
@@ -1211,36 +1222,6 @@ export const TimeTracker: React.FC<TimeTrackerProps> = ({ setIsRunningToNav }) =
                     </p>
                   </div>
                 </div>
-              </div>
-
-              <div className="flex items-center gap-2">
-                {editingProject && (
-                  <button
-                    type="button"
-                    onClick={() => handlePromptDeleteProject(editingProject)}
-                    className="hidden sm:flex px-3.5 py-2 rounded-xl text-xs font-bold text-[#EF4444] hover:bg-[#FEE2E2] dark:hover:bg-[#451A1A] items-center gap-1.5 transition-colors cursor-pointer"
-                    title={t('tracker.deleteProject')}
-                  >
-                    <Trash2 className="w-4 h-4" />
-                    <span className="hidden md:inline">{t('tracker.deleteProject')}</span>
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={handleCloseProjectModal}
-                  className="px-4 py-2 rounded-xl text-xs font-bold text-[#485B44] dark:text-[#9EB598] hover:bg-[#EAEFE6] dark:hover:bg-[#1C281A] transition-colors cursor-pointer"
-                >
-                  {t('common.cancel')}
-                </button>
-                <button
-                  type="button"
-                  onClick={handleSaveProject}
-                  disabled={!projectNameInput.trim()}
-                  className="px-5 py-2.5 rounded-xl bg-[#80D141] hover:bg-[#72BF36] disabled:opacity-40 text-[#0F2600] text-xs font-bold shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer"
-                >
-                  <Check className="w-4 h-4" />
-                  <span>{editingProject ? t('tracker.saveProject') : t('tracker.createProject')}</span>
-                </button>
               </div>
             </div>
 
@@ -1359,8 +1340,8 @@ export const TimeTracker: React.FC<TimeTrackerProps> = ({ setIsRunningToNav }) =
                       <label className="text-xs font-bold uppercase tracking-wider text-[#485B44] dark:text-[#9EB598]">
                         {t('tracker.projectTasks')}
                       </label>
-                      <span className="text-xs font-bold px-2.5 py-0.5 rounded-full bg-[#EDF6E8] dark:bg-[#202E1E] text-[#485B44] dark:text-[#9EB598]">
-                        {language === 'fa' ? toPersianDigits(modalProjectTasks.length) : modalProjectTasks.length}
+                      <span className="text-xs font-semibold text-[#556D50] dark:text-[#8EA887] tabular-nums">
+                        ({language === 'fa' ? toPersianDigits(modalProjectTasks.length) : modalProjectTasks.length})
                       </span>
                     </div>
                   </div>
@@ -1506,24 +1487,15 @@ export const TimeTracker: React.FC<TimeTrackerProps> = ({ setIsRunningToNav }) =
                   </button>
                 )}
               </div>
-              <div className="flex items-center gap-2.5">
-                <button
-                  type="button"
-                  onClick={handleCloseProjectModal}
-                  className="px-5 py-2.5 rounded-xl bg-[#F2F8EE] dark:bg-[#1A2617] text-xs font-bold text-[#485B44] dark:text-[#9EB598] hover:bg-[#E2F5D1] dark:hover:bg-[#243520] transition-colors cursor-pointer"
-                >
-                  {t('common.cancel')}
-                </button>
-                <button
-                  type="button"
-                  onClick={handleSaveProject}
-                  disabled={!projectNameInput.trim()}
-                  className="px-6 py-2.5 rounded-xl bg-[#80D141] hover:bg-[#72BF36] disabled:opacity-40 text-[#0F2600] text-xs font-bold shadow-md flex items-center justify-center gap-1.5 transition-all cursor-pointer"
-                >
-                  <Check className="w-4 h-4" />
-                  <span>{editingProject ? t('tracker.saveProject') : t('tracker.createProject')}</span>
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={handleSaveProject}
+                disabled={!projectNameInput.trim()}
+                className="px-6 py-2.5 rounded-xl bg-[#80D141] hover:bg-[#72BF36] disabled:opacity-40 text-[#0F2600] text-xs font-bold shadow-md flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+              >
+                <Check className="w-4 h-4" />
+                <span>{editingProject ? t('tracker.saveProject') : t('tracker.createProject')}</span>
+              </button>
             </div>
           </motion.div>
         )}
@@ -1544,10 +1516,12 @@ export const TimeTracker: React.FC<TimeTrackerProps> = ({ setIsRunningToNav }) =
                   {t('tracker.manualEntry')}
                 </h3>
                 <button
+                  type="button"
                   onClick={() => setIsManualModalOpen(false)}
-                  className="w-8 h-8 rounded-full bg-[#EDF6E8] dark:bg-[#1C281A] text-xs font-bold text-[#485B44] dark:text-[#9EB598] flex items-center justify-center"
+                  aria-label={t('common.close', 'Close')}
+                  className="w-8 h-8 rounded-full bg-[#EDF6E8] dark:bg-[#1C281A] hover:bg-[#DCEAD4] dark:hover:bg-[#263722] text-[#485B44] dark:text-[#9EB598] flex items-center justify-center transition-colors cursor-pointer"
                 >
-                  ✕
+                  <X className="w-4 h-4" />
                 </button>
               </div>
 
@@ -1671,10 +1645,12 @@ export const TimeTracker: React.FC<TimeTrackerProps> = ({ setIsRunningToNav }) =
                   {t('tracker.editLog')}
                 </h3>
                 <button
+                  type="button"
                   onClick={() => setEditingLog(null)}
-                  className="w-8 h-8 rounded-full bg-[#EDF6E8] dark:bg-[#1C281A] text-xs font-bold text-[#485B44] dark:text-[#9EB598] flex items-center justify-center"
+                  aria-label={t('common.close', 'Close')}
+                  className="w-8 h-8 rounded-full bg-[#EDF6E8] dark:bg-[#1C281A] hover:bg-[#DCEAD4] dark:hover:bg-[#263722] text-[#485B44] dark:text-[#9EB598] flex items-center justify-center transition-colors cursor-pointer"
                 >
-                  ✕
+                  <X className="w-4 h-4" />
                 </button>
               </div>
 

@@ -18,10 +18,9 @@ import {
   ChevronRight,
   CalendarDays,
   Sparkles,
-  Loader2,
-  Bell
+  Loader2
 } from 'lucide-react';
-import { Habit, TimeBucket, EnergyLevel, ENERGY_LEVELS, isHabitActiveOnDate, UserPreferences, EntryReminder } from '../../types';
+import { Habit, TimeBucket, EnergyLevel, ENERGY_LEVELS, isHabitActiveOnDate, UserPreferences } from '../../types';
 import { 
   getTodayKey, 
   shiftDate, 
@@ -35,7 +34,6 @@ import { generateTenSecondHabitFallback } from '../../utils/aiScheduler';
 import { AddHabitModal } from './AddHabitModal';
 import { EditHabitModal } from './EditHabitModal';
 import { MaterialExpressiveDatePicker } from '../common/MaterialExpressiveDatePicker';
-import { QuickReminderModal } from '../common/QuickReminderModal';
 
 interface HabitTrackerProps {
   habits: Habit[];
@@ -60,7 +58,6 @@ export const HabitTracker: React.FC<HabitTrackerProps> = ({
 
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [editingHabit, setEditingHabit] = useState<Habit | null>(null);
-  const [reminderTargetHabit, setReminderTargetHabit] = useState<Habit | null>(null);
   const [selectedHabitForUnstick, setSelectedHabitForUnstick] = useState<Habit | null>(null);
   const [generatingFallbackHabitId, setGeneratingFallbackHabitId] = useState<string | null>(null);
   const [filterEnergy, setFilterEnergy] = useState<EnergyLevel | null>(null);
@@ -625,42 +622,6 @@ export const HabitTracker: React.FC<HabitTrackerProps> = ({
                               </span>
                             )}
 
-                            {/* Reminder Badge */}
-                            {habit.reminders && habit.reminders.length > 0 && (() => {
-                              const hasStrong = habit.reminders.some((r) => r.intensity === 'strong');
-                              return (
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    soundEngine.playPop();
-                                    setReminderTargetHabit(habit);
-                                  }}
-                                  className={`text-[10px] font-bold px-2 py-0.5 rounded-full inline-flex items-center gap-1 shrink-0 cursor-pointer hover:scale-105 transition-transform ${
-                                    isCompletedOnDate
-                                      ? 'bg-[#CCEBB6] dark:bg-[#254A20] text-[#14300B] dark:text-[#CFF3B8]'
-                                      : hasStrong
-                                      ? 'bg-rose-100 dark:bg-rose-950/70 text-rose-700 dark:text-rose-300 border border-rose-300 dark:border-rose-800 shadow-2xs ring-1 ring-rose-400/40'
-                                      : 'bg-[#E8F8D8] dark:bg-[#1E3800] text-[#1C3700] dark:text-[#A2EB68] border border-[#80D141]/40 shadow-2xs'
-                                  }`}
-                                  title={language === 'fa' ? 'مدیریت یادآورها' : 'Manage reminders'}
-                                >
-                                  {hasStrong ? (
-                                    <span className="relative flex h-2 w-2">
-                                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
-                                      <span className="relative inline-flex rounded-full h-2 w-2 bg-rose-500"></span>
-                                    </span>
-                                  ) : (
-                                    <Bell className="w-2.5 h-2.5 fill-current" />
-                                  )}
-                                  <span>
-                                    {language === 'fa'
-                                      ? `${toPersianDigits(habit.reminders.length)} یادآور${hasStrong ? ' (شدید)' : ''}`
-                                      : `${habit.reminders.length} reminder${habit.reminders.length > 1 ? 's' : ''}${hasStrong ? ' (Strong)' : ''}`}
-                                  </span>
-                                </button>
-                              );
-                            })()}
                           </div>
                         </div>
                       </div>
@@ -751,23 +712,8 @@ export const HabitTracker: React.FC<HabitTrackerProps> = ({
                                 </button>
                               </div>
 
-                              {/* Right: Reminder, Edit & Delete */}
+                              {/* Right: Edit & Delete */}
                               <div className="flex items-center gap-1 ml-auto">
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    soundEngine.playPop();
-                                    setReminderTargetHabit(habit);
-                                  }}
-                                  className={`p-1.5 rounded-full transition-all cursor-pointer ${
-                                    habit.reminders && habit.reminders.length > 0
-                                      ? 'text-[#2C690F] dark:text-[#9DD97A] bg-[#E8F8D8] dark:bg-[#1E3800]'
-                                      : 'text-[#485B44] dark:text-[#9EB598] hover:bg-[#EDF6E8] dark:hover:bg-[#202E1E] hover:text-[#151E14] dark:hover:text-[#E8F2E4]'
-                                  }`}
-                                  title={language === 'fa' ? 'تنظیم یادآور' : 'Set reminder'}
-                                >
-                                  <Bell className={`w-4 h-4 ${habit.reminders && habit.reminders.length > 0 ? 'fill-current' : ''}`} />
-                                </button>
 
                                 <button
                                   onClick={() => {
@@ -860,25 +806,6 @@ export const HabitTracker: React.FC<HabitTrackerProps> = ({
         onClose={() => setEditingHabit(null)}
         onSave={(updatedHabit) => {
           onUpdateHabits(habits.map((h) => (h.id === updatedHabit.id ? updatedHabit : h)));
-        }}
-      />
-
-      {/* Quick Reminder Modal for Habits */}
-      <QuickReminderModal
-        isOpen={Boolean(reminderTargetHabit)}
-        onClose={() => setReminderTargetHabit(null)}
-        title={reminderTargetHabit?.title || ''}
-        itemType="habit"
-        targetTime={reminderTargetHabit?.time}
-        reminders={reminderTargetHabit?.reminders || []}
-        onSave={(updatedReminders) => {
-          if (!reminderTargetHabit) return;
-          const updated = habits.map((h) =>
-            h.id === reminderTargetHabit.id
-              ? { ...h, reminders: updatedReminders.length > 0 ? updatedReminders : undefined }
-              : h
-          );
-          onUpdateHabits(updated);
         }}
       />
 

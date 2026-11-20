@@ -9,14 +9,13 @@ import {
   Settings,
   Clock
 } from 'lucide-react';
-import { BujoEntry, BujoType, EnergyLevel, ENERGY_LEVELS, EntryReminder } from '../../types';
+import { BujoEntry, BujoType, EnergyLevel, ENERGY_LEVELS } from '../../types';
 import { soundEngine } from '../../utils/audioSynth';
 import { getTodayKey } from '../../utils/dateUtils';
 import { DEFAULT_JOURNAL_CATEGORIES } from '../../utils/storage';
-import { useI18n, getCategoryLabel, getEnergyLabel } from '../../utils/i18n';
+import { useI18n, getCategoryLabel, getEnergyLabel, toPersianDigits } from '../../utils/i18n';
 import { MaterialExpressiveDatePicker } from '../common/MaterialExpressiveDatePicker';
 import { MaterialExpressiveTimePicker } from '../common/MaterialExpressiveTimePicker';
-import { ReminderPicker } from '../common/ReminderPicker';
 
 interface EditBujoModalProps {
   entry: BujoEntry | null;
@@ -53,7 +52,6 @@ export const EditBujoModal: React.FC<EditBujoModalProps> = ({
   const [energyCost, setEnergyCost] = useState<EnergyLevel>('low');
   const [isPriority, setIsPriority] = useState(false);
   const [category, setCategory] = useState<string>(availableCategories[0] || 'General');
-  const [reminders, setReminders] = useState<EntryReminder[]>([]);
 
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -67,7 +65,6 @@ export const EditBujoModal: React.FC<EditBujoModalProps> = ({
       setEnergyCost(entry.energyCost || 'low');
       setIsPriority(Boolean(entry.isPriority));
       setCategory(entry.category || availableCategories[0] || 'General');
-      setReminders(entry.reminders || []);
       setTimeout(() => {
         inputRef.current?.focus();
       }, 100);
@@ -93,7 +90,6 @@ export const EditBujoModal: React.FC<EditBujoModalProps> = ({
       isPriority: isPriority,
       category: category.trim() || 'General',
       tags: [category.trim() || 'General'],
-      reminders: reminders.length > 0 ? reminders : undefined,
     };
 
     onSave(updated);
@@ -305,13 +301,13 @@ export const EditBujoModal: React.FC<EditBujoModalProps> = ({
                       setDurationMinutes(String(mins));
                       soundEngine.playPop();
                     }}
-                    className={`px-1.5 py-1.5 rounded-xl text-[10px] font-bold border transition-all active:scale-95 ${
+                    className={`px-1.5 py-1.5 rounded-xl text-[10px] font-bold border transition-all active:scale-95 tabular-nums cursor-pointer ${
                       durationMinutes === String(mins)
                         ? 'bg-[#80D141] text-[#0F2600] border-[#80D141]'
                         : 'bg-white dark:bg-[#202E1E] text-[#485B44] dark:text-[#9EB598] border-[#DCEAD4] dark:border-[#263722] hover:bg-[#EDF6E8]'
                     }`}
                   >
-                    {mins}m
+                    {language === 'fa' ? `${toPersianDigits(mins)}${t('focus.minsShort', 'د')}` : `${mins}m`}
                   </button>
                 ))}
               </div>
@@ -394,19 +390,6 @@ export const EditBujoModal: React.FC<EditBujoModalProps> = ({
             </div>
           </div>
         </div>
-
-        {/* Reminders & Notifications Section (for Tasks and Events) */}
-        {(type === 'task' || type === 'event') && (
-          <div className="pt-3 border-t border-[#DCEAD4] dark:border-[#263722]">
-            <ReminderPicker
-              reminders={reminders}
-              onChange={setReminders}
-              targetTime={targetTime}
-              targetDate={targetDate}
-              itemType={type}
-            />
-          </div>
-        )}
 
         {/* Modal Actions */}
         <div className="flex items-center justify-end gap-2 pt-3 border-t border-[#DCEAD4] dark:border-[#263722]">

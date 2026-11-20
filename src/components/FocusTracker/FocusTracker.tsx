@@ -20,7 +20,6 @@ import {
   Plus,
   Pencil,
   Trash2,
-  X,
   Check,
   AlertCircle,
   ArrowLeft,
@@ -29,7 +28,7 @@ import {
 import { FocusTimerMode, FocusSession, AmbientSoundType, UserPreferences, FocusTab, DEFAULT_FOCUS_TAB_ORDER, FocusTimerPreset, DEFAULT_FOCUS_PRESETS } from '../../types';
 import { getTodayDateString } from '../../utils/storage';
 import { soundEngine } from '../../utils/audioSynth';
-import { useI18n, toPersianDigits } from '../../utils/i18n';
+import { useI18n, toPersianDigits, getLocalizedFocusPreset } from '../../utils/i18n';
 import { TimeTracker } from './TimeTracker';
 
 interface FocusTrackerProps {
@@ -94,6 +93,23 @@ export const FocusTracker: React.FC<FocusTrackerProps> = ({
     };
   }, [showPresetManagerModal]);
 
+  useEffect(() => {
+    if (!showPresetManagerModal) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (isCreatingNewPreset || editingPreset) {
+          setEditingPreset(null);
+          setIsCreatingNewPreset(false);
+          setPresetFormError(null);
+        } else {
+          setShowPresetManagerModal(false);
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showPresetManagerModal, isCreatingNewPreset, editingPreset]);
+
   const [mode, setMode] = useState<FocusTimerMode>(() => {
     return presetsList[0]?.id || 'sprint_5';
   });
@@ -124,33 +140,13 @@ export const FocusTracker: React.FC<FocusTrackerProps> = ({
 
   // Dynamically map presets to modes with bilingual localized fallbacks
   const modes: { id: FocusTimerMode; label: string; minutes: number; icon: string; desc: string; rawPreset: FocusTimerPreset }[] = presetsList.map((preset) => {
-    let label = preset.label;
-    let desc = preset.desc || '';
-    if (preset.id === 'sprint_5' && preset.label === 'Dopamine Sprint') {
-      label = t('focus.modeSprint');
-      desc = t('focus.modeSprintDesc');
-    } else if (preset.id === 'burst_15' && preset.label === 'Focus Burst') {
-      label = t('focus.modeBurst');
-      desc = t('focus.modeBurstDesc');
-    } else if (preset.id === 'pomodoro_25' && preset.label === 'Pomodoro') {
-      label = t('focus.modePomodoro');
-      desc = t('focus.modePomodoroDesc');
-    } else if (preset.id === 'deep_45' && preset.label === 'Deep Immersion') {
-      label = t('focus.modeDeep');
-      desc = t('focus.modeDeepDesc');
-    } else if (preset.id === 'flowmodoro' && preset.label === 'Flowmodoro') {
-      label = t('focus.modeFlow');
-      desc = t('focus.modeFlowDesc');
-    } else if (preset.id === 'custom' && preset.label === 'Custom') {
-      label = t('focus.modeCustom');
-      desc = t('focus.modeCustomDesc');
-    }
+    const localized = getLocalizedFocusPreset(preset, language);
     return {
       id: preset.id as FocusTimerMode,
-      label,
+      label: localized.label,
       minutes: preset.minutes,
       icon: preset.icon,
-      desc,
+      desc: localized.desc,
       rawPreset: preset,
     };
   });
@@ -235,12 +231,13 @@ export const FocusTracker: React.FC<FocusTrackerProps> = ({
 
   const handleOpenEditPreset = (preset: FocusTimerPreset) => {
     soundEngine.playPop();
+    const localized = getLocalizedFocusPreset(preset, language);
     setEditingPreset(preset);
     setIsCreatingNewPreset(false);
-    setPresetFormLabel(preset.label);
+    setPresetFormLabel(localized.label);
     setPresetFormMinutes(preset.minutes);
     setPresetFormIcon(preset.icon || '⏱️');
-    setPresetFormDesc(preset.desc || '');
+    setPresetFormDesc(localized.desc);
     setPresetFormError(null);
   };
 
@@ -254,7 +251,7 @@ export const FocusTracker: React.FC<FocusTrackerProps> = ({
   const handleSavePresetForm = () => {
     const cleanLabel = presetFormLabel.trim();
     if (!cleanLabel) {
-      setPresetFormError(language === 'fa' ? 'لطفاً نام پیش‌تنظیم را وارد کنید.' : 'Please enter a preset name.');
+      setPresetFormError(t('focus.presetNameRequired', 'Please enter a preset name.'));
       return;
     }
     const cleanMins = Math.max(0, Math.min(360, Number(presetFormMinutes) || 0));
@@ -289,7 +286,7 @@ export const FocusTracker: React.FC<FocusTrackerProps> = ({
 
     soundEngine.playGentleChime();
     onUpdatePrefs({ customFocusPresets: updatedList });
-    setPresetSuccessMsg(language === 'fa' ? 'پیش‌تنظیم با موفقیت ذخیره شد!' : 'Preset saved successfully!');
+    setPresetSuccessMsg(t('focus.presetSaved', 'Preset saved successfully!'));
     setTimeout(() => setPresetSuccessMsg(null), 3000);
     setEditingPreset(null);
     setIsCreatingNewPreset(false);
@@ -298,7 +295,7 @@ export const FocusTracker: React.FC<FocusTrackerProps> = ({
 
   const handleDeletePreset = (presetId: string) => {
     if (presetsList.length <= 1) {
-      setPresetFormError(language === 'fa' ? 'حداقل یک پیش‌تنظیم باید حفظ شود.' : 'At least one preset must be kept.');
+      setPresetFormError(t('focus.presetKeepOneError', 'At least one preset must be kept.'));
       return;
     }
     soundEngine.playPop();
@@ -308,7 +305,7 @@ export const FocusTracker: React.FC<FocusTrackerProps> = ({
       const fallback = updatedList[0];
       handleSelectMode(fallback.id as FocusTimerMode);
     }
-    setPresetSuccessMsg(language === 'fa' ? 'پیش‌تنظیم حذف شد.' : 'Preset removed.');
+    setPresetSuccessMsg(t('focus.presetRemoved', 'Preset removed.'));
     setTimeout(() => setPresetSuccessMsg(null), 3000);
     if (editingPreset?.id === presetId) {
       setEditingPreset(null);
@@ -319,7 +316,7 @@ export const FocusTracker: React.FC<FocusTrackerProps> = ({
   const handleResetPresets = () => {
     soundEngine.playPop();
     onUpdatePrefs({ customFocusPresets: DEFAULT_FOCUS_PRESETS });
-    setPresetSuccessMsg(language === 'fa' ? 'پیش‌تنظیم‌ها به پیش‌فرض بازگشتند.' : 'Presets restored to defaults.');
+    setPresetSuccessMsg(t('focus.presetsRestored', 'Presets restored to defaults.'));
     setTimeout(() => setPresetSuccessMsg(null), 3000);
     setEditingPreset(null);
     setIsCreatingNewPreset(false);
@@ -983,81 +980,71 @@ export const FocusTracker: React.FC<FocusTrackerProps> = ({
           >
             {/* Top Navigation Bar */}
             <header className="h-16 sm:h-20 bg-white/95 dark:bg-[#152014]/95 backdrop-blur-md border-b border-[#DCEAD4] dark:border-[#263722] px-4 sm:px-8 flex items-center justify-between shrink-0 shadow-xs z-10">
-              <div className="flex items-center gap-3 sm:gap-4">
+              <div className="flex items-center gap-3 sm:gap-4 min-w-0">
                 <button
                   type="button"
                   id="btn-back-to-focus-timer"
                   onClick={() => {
-                    soundEngine.playPop();
-                    setShowPresetManagerModal(false);
-                    setEditingPreset(null);
-                    setIsCreatingNewPreset(false);
-                    setPresetFormError(null);
+                    if (isCreatingNewPreset || editingPreset) {
+                      handleCancelPresetForm();
+                    } else {
+                      soundEngine.playPop();
+                      setShowPresetManagerModal(false);
+                      setEditingPreset(null);
+                      setIsCreatingNewPreset(false);
+                      setPresetFormError(null);
+                    }
                   }}
-                  className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 rounded-2xl bg-[#EDF6E8] dark:bg-[#1E2B1A] hover:bg-[#DDF4CD] dark:hover:bg-[#283A23] text-[#245209] dark:text-[#80D141] font-bold text-xs sm:text-sm transition-all cursor-pointer shadow-xs active:scale-95"
+                  className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 rounded-2xl bg-[#EDF6E8] dark:bg-[#1E2B1A] hover:bg-[#DDF4CD] dark:hover:bg-[#283A23] text-[#245209] dark:text-[#80D141] font-bold text-xs sm:text-sm transition-all cursor-pointer shadow-xs active:scale-95 shrink-0"
                 >
                   {language === 'fa' ? <ArrowRight className="w-4 h-4" /> : <ArrowLeft className="w-4 h-4" />}
-                  <span>{language === 'fa' ? 'بازگشت به تایمر تمرکز' : 'Back to Focus Timer'}</span>
+                  <span>
+                    {(isCreatingNewPreset || editingPreset)
+                      ? t('focus.backToPresets', 'Back to Presets')
+                      : t('focus.backToTimer', 'Back to Focus Timer')}
+                  </span>
                 </button>
 
-                <div className="hidden md:flex items-center gap-2.5 border-l rtl:border-l-0 rtl:border-r border-[#DCEAD4] dark:border-[#263722] pl-3.5 rtl:pl-0 rtl:pr-3.5">
-                  <div className="w-9 h-9 rounded-2xl bg-[#E8F8D8] dark:bg-[#1E3800] text-[#1E4300] dark:text-[#80D141] flex items-center justify-center shadow-xs">
+                <div className="hidden md:flex items-center gap-2.5 border-l rtl:border-l-0 rtl:border-r border-[#DCEAD4] dark:border-[#263722] pl-3.5 rtl:pl-0 rtl:pr-3.5 min-w-0">
+                  <div className="w-9 h-9 rounded-2xl bg-[#E8F8D8] dark:bg-[#1E3800] text-[#1E4300] dark:text-[#80D141] flex items-center justify-center shadow-xs shrink-0">
                     <Sliders className="w-4.5 h-4.5" />
                   </div>
-                  <div>
-                    <h2 className="text-base font-bold text-[#151E14] dark:text-[#E8F2E4] font-display">
-                      {t('focus.managePresets', 'Focus Timer Presets')}
+                  <div className="min-w-0">
+                    <h2 className="text-base font-bold text-[#151E14] dark:text-[#E8F2E4] font-display truncate">
+                      {t('focus.presetsTitle', 'Focus Timer Presets')}
                     </h2>
-                    <p className="text-[11px] text-[#485B44] dark:text-[#9EB598]">
-                      {language === 'fa'
-                        ? 'شخصی‌سازی زمان‌ها، نمادها و حالت‌های تمرکز'
-                        : 'Customize timer durations, emoji icons, and focus modes'}
+                    <p className="text-[11px] text-[#485B44] dark:text-[#9EB598] truncate">
+                      {t('focus.managePresetsSub', 'Customize timer durations, emoji icons, and focus modes')}
                     </p>
                   </div>
                 </div>
               </div>
 
               {/* Header Right Actions */}
-              <div className="flex items-center gap-2">
-                {!isCreatingNewPreset && !editingPreset && (
-                  <>
-                    <button
-                      type="button"
-                      id="btn-add-new-preset-header"
-                      onClick={handleOpenAddPreset}
-                      className="px-3.5 sm:px-4 py-2 sm:py-2.5 rounded-xl bg-[#80D141] hover:bg-[#72BF36] text-[#0F2600] text-xs sm:text-sm font-bold shadow-xs flex items-center gap-1.5 transition-all cursor-pointer active:scale-95"
-                    >
-                      <Plus className="w-4 h-4 stroke-[2.5]" />
-                      <span>{t('focus.addPreset', 'Add Preset')}</span>
-                    </button>
+              {!isCreatingNewPreset && !editingPreset && (
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={handleResetPresets}
+                    className="px-3 sm:px-3.5 py-2 sm:py-2.5 rounded-xl bg-[#EDF6E8] dark:bg-[#1E2B1A] hover:bg-[#E2F2D9] dark:hover:bg-[#283A23] text-[#245209] dark:text-[#80D141] text-xs sm:text-sm font-bold border border-[#DCEAD4] dark:border-[#263722] flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs active:scale-95"
+                    title={t('focus.resetPresets', 'Reset to Defaults')}
+                    aria-label={t('focus.resetPresets', 'Reset Defaults')}
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">{t('focus.resetPresets', 'Reset Defaults')}</span>
+                  </button>
 
-                    <button
-                      type="button"
-                      onClick={handleResetPresets}
-                      className="hidden sm:flex px-3 sm:px-3.5 py-2 sm:py-2.5 rounded-xl bg-[#EDF6E8] dark:bg-[#1E2B1A] hover:bg-[#E2F2D9] dark:hover:bg-[#283A23] text-[#245209] dark:text-[#80D141] text-xs sm:text-sm font-bold border border-[#DCEAD4] dark:border-[#263722] items-center gap-1.5 transition-colors cursor-pointer shadow-xs active:scale-95"
-                      title={t('focus.resetPresets', 'Reset to Defaults')}
-                    >
-                      <RotateCcw className="w-3.5 h-3.5" />
-                      <span>{t('focus.resetPresets', 'Reset Defaults')}</span>
-                    </button>
-                  </>
-                )}
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    soundEngine.playPop();
-                    setShowPresetManagerModal(false);
-                    setEditingPreset(null);
-                    setIsCreatingNewPreset(false);
-                    setPresetFormError(null);
-                  }}
-                  className="w-9 h-9 sm:w-10 sm:h-10 rounded-2xl flex items-center justify-center text-[#485B44] dark:text-[#9EB598] hover:bg-[#EDF6E8] dark:hover:bg-[#202E1E] transition-colors cursor-pointer"
-                  aria-label="Close"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
+                  <button
+                    type="button"
+                    id="btn-add-new-preset-header"
+                    onClick={handleOpenAddPreset}
+                    className="px-3.5 sm:px-4 py-2 sm:py-2.5 rounded-xl bg-[#80D141] hover:bg-[#72BF36] text-[#0F2600] text-xs sm:text-sm font-bold shadow-xs flex items-center gap-1.5 transition-all cursor-pointer active:scale-95"
+                  >
+                    <Plus className="w-4 h-4 stroke-[2.5]" />
+                    <span>{t('focus.addPreset', 'Add Preset')}</span>
+                  </button>
+                </div>
+              )}
             </header>
 
             {/* Scrollable Full-Screen Content */}
@@ -1103,32 +1090,20 @@ export const FocusTracker: React.FC<FocusTrackerProps> = ({
                     }}
                     className="bg-white dark:bg-[#182316] rounded-3xl p-5 sm:p-8 shadow-sm border border-[#DCEAD4] dark:border-[#263722] space-y-6"
                   >
-                    <div className="flex items-center justify-between pb-4 border-b border-[#DCEAD4] dark:border-[#263722]">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-2xl bg-[#E8F8D8] dark:bg-[#1E3800] text-[#1E4300] dark:text-[#80D141] flex items-center justify-center text-lg">
-                          {presetFormIcon || '⏱️'}
-                        </div>
-                        <div>
-                          <h3 className="font-bold text-base sm:text-lg text-[#151E14] dark:text-[#E8F2E4] font-display">
-                            {isCreatingNewPreset
-                              ? (language === 'fa' ? 'ایجاد پیش‌تنظیم جدید' : 'Create New Focus Preset')
-                              : (language === 'fa' ? `ویرایش پیش‌تنظیم: ${presetFormLabel || ''}` : `Edit Preset: ${presetFormLabel || ''}`)}
-                          </h3>
-                          <p className="text-xs text-[#485B44] dark:text-[#9EB598]">
-                            {language === 'fa'
-                              ? 'تنظیمات زمان و نام پیش‌تنظیم را وارد کرده و پیش‌نمایش آن را در سمت راست مشاهده کنید'
-                              : 'Configure duration, icon, and label, and review live card appearance'}
-                          </p>
-                        </div>
+                    <div className="flex items-center gap-3 pb-4 border-b border-[#DCEAD4] dark:border-[#263722]">
+                      <div className="w-10 h-10 rounded-2xl bg-[#E8F8D8] dark:bg-[#1E3800] text-[#1E4300] dark:text-[#80D141] flex items-center justify-center text-lg shrink-0">
+                        {presetFormIcon || '⏱️'}
                       </div>
-
-                      <button
-                        type="button"
-                        onClick={handleCancelPresetForm}
-                        className="px-3.5 py-1.5 rounded-xl text-xs font-bold text-[#485B44] dark:text-[#9EB598] hover:bg-[#EDF6E8] dark:hover:bg-[#202E1E] transition-colors cursor-pointer"
-                      >
-                        {language === 'fa' ? 'انصراف' : 'Cancel'}
-                      </button>
+                      <div>
+                        <h3 className="font-bold text-base sm:text-lg text-[#151E14] dark:text-[#E8F2E4] font-display">
+                          {isCreatingNewPreset
+                            ? t('focus.createPresetTitle', 'Create New Focus Preset')
+                            : `${t('focus.editPresetTitle', 'Edit Preset')}${presetFormLabel ? `: ${presetFormLabel}` : ''}`}
+                        </h3>
+                        <p className="text-xs text-[#485B44] dark:text-[#9EB598]">
+                          {t('focus.presetFormSub', 'Configure duration, icon, and label, and review live card appearance')}
+                        </p>
+                      </div>
                     </div>
 
                     <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 sm:gap-8">
@@ -1167,15 +1142,18 @@ export const FocusTracker: React.FC<FocusTrackerProps> = ({
                             />
                             <span className="text-xs sm:text-sm text-[#485B44] dark:text-[#9EB598] font-medium">
                               {presetFormMinutes === 0
-                                ? (language === 'fa' ? '🚀 شمارش رو به بالا (فلومودورو نامحدود)' : '🚀 Open-ended count-up flowmodoro')
-                                : (language === 'fa' ? `${toPersianDigits(presetFormMinutes)} دقیقه تایمر معکوس` : `${presetFormMinutes} minutes countdown timer`)}
+                                ? `🚀 ${t('focus.flowCountdownNote', 'Open-ended count-up flowmodoro')}`
+                                : t('focus.minsCountdownNote', '{mins} minutes countdown timer').replace(
+                                    '{mins}',
+                                    language === 'fa' ? toPersianDigits(presetFormMinutes) : String(presetFormMinutes)
+                                  )}
                             </span>
                           </div>
 
                           {/* Quick pick buttons */}
                           <div className="flex items-center gap-1.5 mt-3 flex-wrap">
-                            <span className="text-xs text-[#485B44] dark:text-[#9EB598] font-bold mr-1">
-                              {language === 'fa' ? 'انتخاب سریع:' : 'Quick set:'}
+                            <span className="text-xs text-[#485B44] dark:text-[#9EB598] font-bold me-1">
+                              {t('focus.quickSet', 'Quick set:')}
                             </span>
                             {[5, 15, 20, 25, 45, 60, 90, 0].map((mins) => (
                               <button
@@ -1185,13 +1163,15 @@ export const FocusTracker: React.FC<FocusTrackerProps> = ({
                                   soundEngine.playPop();
                                   setPresetFormMinutes(mins);
                                 }}
-                                className={`px-2.5 py-1 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                                className={`px-2.5 py-1 rounded-xl text-xs font-bold transition-all cursor-pointer tabular-nums ${
                                   presetFormMinutes === mins
                                     ? 'bg-[#80D141] text-[#0F2600] shadow-xs'
                                     : 'bg-[#F8FAF5] dark:bg-[#202D1D] text-[#485B44] dark:text-[#9EB598] hover:bg-[#E8F8D8] border border-[#DCEAD4] dark:border-[#2E402B]'
                                 }`}
                               >
-                                {mins === 0 ? (language === 'fa' ? 'فلومودورو' : 'Flow') : `${language === 'fa' ? toPersianDigits(mins) : mins}m`}
+                                {mins === 0
+                                  ? t('focus.flowShort', 'Flow')
+                                  : `${language === 'fa' ? toPersianDigits(mins) : mins}${t('focus.minsShort', 'm')}`}
                               </button>
                             ))}
                           </div>
@@ -1211,7 +1191,7 @@ export const FocusTracker: React.FC<FocusTrackerProps> = ({
                               className="w-16 h-12 rounded-2xl bg-[#F8FAF5] dark:bg-[#202D1D] border border-[#DCEAD4] dark:border-[#2E402B] text-2xl text-center focus:outline-none focus:ring-2 focus:ring-[#80D141] shadow-inner"
                             />
                             <span className="text-xs text-[#485B44] dark:text-[#9EB598]">
-                              {language === 'fa' ? 'یا روی نمادهای پیشنهادی کلیک کنید:' : 'or click any icon below to select:'}
+                              {t('focus.iconHint', 'or click any icon below to select:')}
                             </span>
                           </div>
                           <div className="flex items-center gap-2 flex-wrap">
@@ -1254,23 +1234,21 @@ export const FocusTracker: React.FC<FocusTrackerProps> = ({
                       <div className="lg:col-span-5 flex flex-col justify-between p-5 sm:p-6 rounded-3xl bg-[#F8FAF5] dark:bg-[#1E2B1A] border border-[#DCEAD4] dark:border-[#2A3E26]">
                         <div>
                           <span className="text-xs font-bold uppercase tracking-wider text-[#3B7E10] dark:text-[#80D141] block mb-2">
-                            {language === 'fa' ? 'پیش‌نمایش زنده کلید تایمر' : 'Live Tile Preview'}
+                            {t('focus.livePreviewTitle', 'Live Tile Preview')}
                           </span>
                           <p className="text-xs text-[#485B44] dark:text-[#9EB598] mb-5">
-                            {language === 'fa'
-                              ? 'کلید انتخابی در نوار حالت‌های تایمر به این شکل نمایش داده خواهد شد:'
-                              : 'This is how your preset button will appear in the focus timer bar:'}
+                            {t('focus.livePreviewDesc', 'This is how your preset button will appear in the focus timer bar:')}
                           </p>
 
                           {/* Preview Tile */}
                           <div className="max-w-[220px] mx-auto p-4 rounded-3xl bg-[#80D141] text-[#0F2600] shadow-md border border-[#80D141] flex flex-col items-center justify-between text-center min-h-[110px] gap-2">
                             <span className="text-2xl">{presetFormIcon || '⏱️'}</span>
                             <span className="font-bold text-sm leading-tight">
-                              {presetFormLabel.trim() || (language === 'fa' ? 'نام پیش‌تنظیم' : 'Preset Name')}
+                              {presetFormLabel.trim() || t('focus.presetName', 'Preset Name')}
                             </span>
-                            <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-[#0F2600]/15 text-[#0F2600]">
+                            <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-[#0F2600]/15 text-[#0F2600] tabular-nums">
                               {presetFormMinutes === 0
-                                ? (language === 'fa' ? 'فلومودورو' : 'Flowmodoro')
+                                ? t('focus.modeFlow', 'Flowmodoro')
                                 : `${language === 'fa' ? toPersianDigits(presetFormMinutes) : presetFormMinutes} ${t('focus.minsUnit')}`}
                             </span>
                           </div>
@@ -1282,74 +1260,46 @@ export const FocusTracker: React.FC<FocusTrackerProps> = ({
                           )}
                         </div>
 
-                        {/* Form Action Buttons in Preview Column */}
-                        <div className="flex items-center gap-3 pt-6 mt-6 border-t border-[#DCEAD4] dark:border-[#2A3E26]">
-                          <button
-                            type="button"
-                            onClick={handleCancelPresetForm}
-                            className="flex-1 py-3 rounded-2xl text-xs sm:text-sm font-bold text-[#485B44] dark:text-[#9EB598] hover:bg-[#EDF6E8] dark:hover:bg-[#253522] transition-colors cursor-pointer text-center"
-                          >
-                            {language === 'fa' ? 'انصراف' : 'Cancel'}
-                          </button>
+                        {/* Form Save Button in Preview Column */}
+                        <div className="pt-6 mt-6 border-t border-[#DCEAD4] dark:border-[#2A3E26]">
                           <button
                             type="submit"
-                            className="flex-1 py-3 rounded-2xl bg-[#80D141] hover:bg-[#72BF36] text-[#0F2600] text-xs sm:text-sm font-bold shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer active:scale-95"
+                            className="w-full py-3 rounded-2xl bg-[#80D141] hover:bg-[#72BF36] text-[#0F2600] text-xs sm:text-sm font-bold shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer active:scale-95"
                           >
                             <Check className="w-4 h-4 stroke-[3]" />
-                            <span>{language === 'fa' ? 'ذخیره پیش‌تنظیم' : 'Save Preset'}</span>
+                            <span>{t('focus.savePreset', 'Save Preset')}</span>
                           </button>
                         </div>
                       </div>
                     </div>
                   </form>
                 ) : (
-                  /* View 2: Presets Grid List with Quick Actions */
+                  /* View 2: Presets Grid List */
                   <div className="space-y-6">
                     {/* Header Banner & Stats */}
-                    <div className="bg-white dark:bg-[#182316] rounded-3xl p-5 sm:p-6 shadow-sm border border-[#DCEAD4] dark:border-[#263722] flex items-center justify-between gap-4 flex-wrap">
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2">
-                          <span className="w-2.5 h-2.5 rounded-full bg-[#80D141] animate-pulse" />
-                          <h3 className="font-bold text-base text-[#151E14] dark:text-[#E8F2E4] font-display">
-                            {language === 'fa'
-                              ? `${toPersianDigits(presetsList.length)} پیش‌تنظیم تمرکز پیکربندی‌شده`
-                              : `${presetsList.length} Focus Presets Configured`}
-                          </h3>
-                        </div>
-                        <p className="text-xs text-[#485B44] dark:text-[#9EB598]">
-                          {language === 'fa'
-                            ? 'روی هر پیش‌تنظیم کلیک کنید تا به عنوان حالت فعال تایمر انتخاب شود یا آن را ویرایش کنید'
-                            : 'Click any preset to activate it immediately in the timer, or use Edit/Delete to customize'}
-                        </p>
+                    <div className="bg-white dark:bg-[#182316] rounded-3xl p-5 sm:p-6 shadow-sm border border-[#DCEAD4] dark:border-[#263722] space-y-1">
+                      <div className="flex items-center gap-2">
+                        <Sliders className="w-4 h-4 text-[#3B7E10] dark:text-[#80D141] shrink-0" />
+                        <h3 className="font-bold text-base text-[#151E14] dark:text-[#E8F2E4] font-display tabular-nums">
+                          {t('focus.presetsConfiguredCount', '{count} Focus Presets Configured').replace(
+                            '{count}',
+                            language === 'fa' ? toPersianDigits(presetsList.length) : String(presetsList.length)
+                          )}
+                        </h3>
                       </div>
-
-                      <div className="flex items-center gap-2.5">
-                        <button
-                          type="button"
-                          id="btn-add-new-preset-body"
-                          onClick={handleOpenAddPreset}
-                          className="px-4 py-2.5 rounded-2xl bg-[#80D141] hover:bg-[#72BF36] text-[#0F2600] text-xs sm:text-sm font-bold shadow-xs flex items-center gap-1.5 transition-all cursor-pointer active:scale-95"
-                        >
-                          <Plus className="w-4 h-4 stroke-[2.5]" />
-                          <span>{t('focus.addPreset', 'Add Preset')}</span>
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={handleResetPresets}
-                          className="px-3.5 py-2.5 rounded-2xl bg-[#EDF6E8] dark:bg-[#1E2B1A] hover:bg-[#E2F2D9] dark:hover:bg-[#283A23] text-[#245209] dark:text-[#80D141] text-xs sm:text-sm font-bold border border-[#DCEAD4] dark:border-[#263722] flex items-center gap-1.5 transition-colors cursor-pointer active:scale-95 shadow-xs"
-                          title={t('focus.resetPresets', 'Reset to Defaults')}
-                        >
-                          <RotateCcw className="w-3.5 h-3.5" />
-                          <span>{t('focus.resetPresets', 'Reset Defaults')}</span>
-                        </button>
-                      </div>
+                      <p className="text-xs text-[#485B44] dark:text-[#9EB598]">
+                        {t(
+                          'focus.presetsManagerHint',
+                          'Click any preset to activate it immediately in the timer, or use Edit/Delete to customize'
+                        )}
+                      </p>
                     </div>
 
                     {/* Presets Grid */}
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                       {presetsList.map((preset, idx) => {
                         const isCurrentActive = mode === preset.id;
+                        const localized = getLocalizedFocusPreset(preset, language);
                         return (
                           <div
                             key={preset.id || idx}
@@ -1369,12 +1319,12 @@ export const FocusTracker: React.FC<FocusTrackerProps> = ({
                                   {isCurrentActive && (
                                     <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#80D141] text-[#0F2600] flex items-center gap-1 shadow-2xs">
                                       <Check className="w-3 h-3 stroke-[3]" />
-                                      <span>{language === 'fa' ? 'انتخاب‌شده' : 'Active'}</span>
+                                      <span>{t('focus.presetActiveBadge', 'Active')}</span>
                                     </span>
                                   )}
-                                  <span className="text-xs font-bold px-2.5 py-1 rounded-full bg-[#EDF6E8] dark:bg-[#233520] text-[#3B7E10] dark:text-[#80D141] border border-[#D0E2C8] dark:border-[#2E432A]">
+                                  <span className="text-xs font-bold px-2.5 py-1 rounded-full bg-[#EDF6E8] dark:bg-[#233520] text-[#3B7E10] dark:text-[#80D141] border border-[#D0E2C8] dark:border-[#2E432A] tabular-nums">
                                     {preset.minutes === 0
-                                      ? (language === 'fa' ? 'فلومودورو' : 'Flowmodoro')
+                                      ? t('focus.modeFlow', 'Flowmodoro')
                                       : `${language === 'fa' ? toPersianDigits(preset.minutes) : preset.minutes} ${t('focus.minsUnit')}`}
                                   </span>
                                 </div>
@@ -1382,15 +1332,15 @@ export const FocusTracker: React.FC<FocusTrackerProps> = ({
 
                               <div>
                                 <h4 className="font-bold text-base text-[#151E14] dark:text-[#E8F2E4] truncate">
-                                  {preset.label}
+                                  {localized.label}
                                 </h4>
-                                {preset.desc ? (
+                                {localized.desc ? (
                                   <p className="text-xs text-[#485B44] dark:text-[#9EB598] line-clamp-2 mt-1">
-                                    {preset.desc}
+                                    {localized.desc}
                                   </p>
                                 ) : (
                                   <p className="text-xs text-[#79747E] dark:text-[#7D9179] mt-1 italic">
-                                    {language === 'fa' ? 'بدون توضیح' : 'No description'}
+                                    {t('focus.noDescription', 'No description')}
                                   </p>
                                 )}
                               </div>
@@ -1401,7 +1351,7 @@ export const FocusTracker: React.FC<FocusTrackerProps> = ({
                               {isCurrentActive ? (
                                 <span className="text-xs font-bold text-[#3B7E10] dark:text-[#80D141] flex items-center gap-1">
                                   <Check className="w-3.5 h-3.5 stroke-[2.5]" />
-                                  <span>{language === 'fa' ? 'در حال اجرا' : 'Current Mode'}</span>
+                                  <span>{t('focus.currentMode', 'Current Mode')}</span>
                                 </span>
                               ) : (
                                 <button
@@ -1409,12 +1359,14 @@ export const FocusTracker: React.FC<FocusTrackerProps> = ({
                                   onClick={() => {
                                     handleSelectMode(preset.id as FocusTimerMode);
                                     soundEngine.playGentleChime();
-                                    setPresetSuccessMsg(language === 'fa' ? `حالت ${preset.label} فعال شد!` : `Activated ${preset.label}!`);
+                                    setPresetSuccessMsg(
+                                      t('focus.presetActivated', 'Activated {name}!').replace('{name}', localized.label)
+                                    );
                                     setTimeout(() => setPresetSuccessMsg(null), 2500);
                                   }}
                                   className="px-3 py-1.5 rounded-xl bg-[#EDF6E8] dark:bg-[#22301F] hover:bg-[#DDF4CD] text-[#245209] dark:text-[#80D141] text-xs font-bold transition-all cursor-pointer shadow-2xs"
                                 >
-                                  {language === 'fa' ? 'انتخاب برای تایمر' : 'Set as Active'}
+                                  {t('focus.setAsActive', 'Set as Active')}
                                 </button>
                               )}
 
@@ -1447,27 +1399,6 @@ export const FocusTracker: React.FC<FocusTrackerProps> = ({
                 )}
               </div>
             </div>
-
-            {/* Bottom Footer Bar */}
-            <footer className="h-14 sm:h-16 bg-white/95 dark:bg-[#152014]/95 backdrop-blur-md border-t border-[#DCEAD4] dark:border-[#263722] px-4 sm:px-8 flex items-center justify-between text-xs sm:text-sm text-[#485B44] dark:text-[#9EB598] shrink-0">
-              <span className="font-medium">
-                {language === 'fa'
-                  ? `${toPersianDigits(presetsList.length)} پیش‌تنظیم در دسترس در صفحه تمرکز`
-                  : `${presetsList.length} presets available in Focus mode`}
-              </span>
-              <button
-                type="button"
-                onClick={() => {
-                  soundEngine.playPop();
-                  setShowPresetManagerModal(false);
-                  setEditingPreset(null);
-                  setIsCreatingNewPreset(false);
-                }}
-                className="px-5 py-2 rounded-xl bg-[#80D141] hover:bg-[#72BF36] text-[#0F2600] font-bold shadow-xs transition-colors cursor-pointer active:scale-95"
-              >
-                {language === 'fa' ? 'اتمام و بازگشت' : 'Done & Return'}
-              </button>
-            </footer>
           </motion.div>
         )}
       </AnimatePresence>

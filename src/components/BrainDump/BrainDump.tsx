@@ -94,8 +94,10 @@ export const BrainDump: React.FC<BrainDumpProps> = ({
   
   // Voice Dictation state
   const [isListening, setIsListening] = useState(false);
+  const [interimTranscript, setInterimTranscript] = useState('');
   const [speechError, setSpeechError] = useState<string | null>(null);
   const recognitionRef = useRef<any>(null);
+  const lastProcessedResultIndexRef = useRef<number>(-1);
 
   // AI Tidy Up state
   const [isTidying, setIsTidying] = useState(false);
@@ -104,41 +106,102 @@ export const BrainDump: React.FC<BrainDumpProps> = ({
 
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
+  // Stop voice dictation cleanly whenever the Add Thought modal closes
+  useEffect(() => {
+    if (!isAddModalOpen) {
+      if (isListening && recognitionRef.current) {
+        try {
+          recognitionRef.current.stop();
+        } catch {}
+      }
+      setIsListening(false);
+      setInterimTranscript('');
+    }
+  }, [isAddModalOpen, isListening]);
+
   // Setup Speech Recognition
   useEffect(() => {
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (SpeechRecognition) {
-      const recognition = new SpeechRecognition();
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      recognition.lang = language === 'fa' ? 'fa-IR' : 'en-US';
-
-      recognition.onresult = (event: any) => {
-        let transcript = '';
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          transcript += event.results[i][0].transcript;
-        }
-        if (transcript.trim()) {
-          setInputText((prev) => (prev ? `${prev} ${transcript}` : transcript));
-        }
-      };
-
-      recognition.onerror = (event: any) => {
-        console.warn('Speech recognition error', event.error);
-        setIsListening(false);
-        if (event.error === 'not-allowed') {
-          setSpeechError(language === 'fa' ? 'دسترسی میکروفون رد شد.' : 'Microphone permission was denied.');
-        } else {
-          setSpeechError(language === 'fa' ? 'خطا در تایپ صوتی. لطفاً تایپ کنید.' : 'Voice dictation error. Please try typing.');
-        }
-      };
-
-      recognition.onend = () => {
-        setIsListening(false);
-      };
-
-      recognitionRef.current = recognition;
+    if (!SpeechRecognition) {
+      recognitionRef.current = null;
+      return;
     }
+
+    const recognition = new SpeechRecognition();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.maxAlternatives = 1;
+    recognition.lang = language === 'fa' ? 'fa-IR' : 'en-US';
+
+    recognition.onstart = () => {
+      lastProcessedResultIndexRef.current = -1;
+      setInterimTranscript('');
+    };
+
+    recognition.onresult = (event: any) => {
+      const startIndex = Math.max(event.resultIndex ?? 0, 0);
+      const finalChunks: string[] = [];
+      const interimChunks: string[] = [];
+
+      for (let i = startIndex; i < event.results.length; i++) {
+        const result = event.results[i];
+        const rawText = result?.[0]?.transcript || '';
+
+        if (result?.isFinal) {
+          if (i > lastProcessedResultIndexRef.current) {
+            lastProcessedResultIndexRef.current = i;
+            const cleaned = rawText.trim();
+            if (cleaned) {
+              finalChunks.push(cleaned);
+            }
+          }
+        } else if (rawText.trim()) {
+          interimChunks.push(rawText.trim());
+        }
+      }
+
+      if (finalChunks.length > 0) {
+        const finalized = finalChunks.join(' ');
+        setInputText((prev) => {
+          const base = prev.trimEnd();
+          return base ? `${base} ${finalized}` : finalized;
+        });
+      }
+
+      setInterimTranscript(interimChunks.join(' '));
+    };
+
+    recognition.onerror = (event: any) => {
+      console.warn('Speech recognition error', event.error);
+      setIsListening(false);
+      setInterimTranscript('');
+      if (event.error === 'not-allowed') {
+        setSpeechError(language === 'fa' ? 'دسترسی میکروفون رد شد.' : 'Microphone permission was denied.');
+      } else if (event.error !== 'aborted') {
+        setSpeechError(language === 'fa' ? 'خطا در تایپ صوتی. لطفاً تایپ کنید.' : 'Voice dictation error. Please try typing.');
+      }
+    };
+
+    recognition.onend = () => {
+      setIsListening(false);
+      setInterimTranscript('');
+      lastProcessedResultIndexRef.current = -1;
+    };
+
+    recognitionRef.current = recognition;
+
+    return () => {
+      recognition.onstart = null;
+      recognition.onresult = null;
+      recognition.onerror = null;
+      recognition.onend = null;
+      try {
+        recognition.abort();
+      } catch {}
+      if (recognitionRef.current === recognition) {
+        recognitionRef.current = null;
+      }
+    };
   }, [language]);
 
   const toggleListening = () => {
@@ -149,29 +212,35 @@ export const BrainDump: React.FC<BrainDumpProps> = ({
 
     setSpeechError(null);
     if (isListening) {
-      recognitionRef.current.stop();
+      try {
+        recognitionRef.current.stop();
+      } catch {}
       setIsListening(false);
+      setInterimTranscript('');
       soundEngine.playPop();
     } else {
       try {
+        lastProcessedResultIndexRef.current = -1;
+        setInterimTranscript('');
         recognitionRef.current.start();
         setIsListening(true);
         soundEngine.playGentleChime();
       } catch (err) {
         console.error(err);
         setIsListening(false);
+        setInterimTranscript('');
       }
     }
   };
 
   const handleAddThought = () => {
-    const trimmed = inputText.trim();
-    if (!trimmed) return;
+    const combined = interimTranscript ? `${inputText.trimEnd()} ${interimTranscript.trim()}`.trim() : inputText.trim();
+    if (!combined) return;
 
     soundEngine.playPop();
     const newItem: BrainDumpItem = {
       id: `bd-${Date.now()}`,
-      content: trimmed,
+      content: combined,
       createdAt: Date.now(),
       isProcessed: false,
       isPinned: false,
@@ -179,8 +248,11 @@ export const BrainDump: React.FC<BrainDumpProps> = ({
 
     onUpdateItems([newItem, ...items]);
     setInputText('');
+    setInterimTranscript('');
     if (isListening && recognitionRef.current) {
-      recognitionRef.current.stop();
+      try {
+        recognitionRef.current.stop();
+      } catch {}
       setIsListening(false);
     }
     setIsAddModalOpen(false);
@@ -473,10 +545,12 @@ export const BrainDump: React.FC<BrainDumpProps> = ({
                   />
                   {searchQuery && (
                     <button
+                      type="button"
                       onClick={() => setSearchQuery('')}
-                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-[#677C62] hover:text-[#151E14]"
+                      aria-label={t('common.close', 'Clear search')}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#677C62] hover:text-[#151E14] dark:hover:text-[#E8F2E4] cursor-pointer"
                     >
-                      ✕
+                      <X className="w-3.5 h-3.5" />
                     </button>
                   )}
                 </div>
@@ -552,11 +626,18 @@ export const BrainDump: React.FC<BrainDumpProps> = ({
                   className="w-full p-3.5 rounded-2xl bg-[#EDF6E8] dark:bg-[#1C281A] text-[#151E14] dark:text-[#E8F2E4] placeholder-[#677C62] dark:placeholder-[#889E84] text-sm resize-none focus:outline-none focus:ring-2 focus:ring-[#80D141] leading-relaxed font-medium"
                 />
 
-                {/* Listening indicator */}
+                {/* Listening indicator & live interim preview */}
                 {isListening && (
-                  <div className="flex items-center gap-2 mt-2 px-3 py-1.5 rounded-full bg-[#FEE1DC] dark:bg-[#3E1C18] text-[#B3261E] dark:text-[#F2B8B5] text-xs font-bold w-fit animate-pulse">
-                    <span className="w-2 h-2 rounded-full bg-[#B3261E] animate-ping" />
-                    <span>{t('braindump.listeningVoice')}</span>
+                  <div className="flex flex-wrap items-center gap-2 mt-2">
+                    <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#FEE1DC] dark:bg-[#3E1C18] text-[#B3261E] dark:text-[#F2B8B5] text-xs font-bold w-fit">
+                      <Mic className="w-3.5 h-3.5 shrink-0" />
+                      <span>{t('braindump.listeningVoice')}</span>
+                    </div>
+                    {interimTranscript && (
+                      <span className="text-xs italic text-[#485B44] dark:text-[#9EB598] truncate max-w-full">
+                        {interimTranscript}
+                      </span>
+                    )}
                   </div>
                 )}
 
@@ -576,9 +657,9 @@ export const BrainDump: React.FC<BrainDumpProps> = ({
                   whileTap={{ scale: 0.95 }}
                   type="button"
                   onClick={toggleListening}
-                  className={`px-3 py-2 rounded-full transition-all flex items-center gap-1.5 text-xs font-bold ${
+                  className={`px-3 py-2 rounded-full transition-all flex items-center gap-1.5 text-xs font-bold cursor-pointer ${
                     isListening
-                      ? 'bg-[#B3261E] text-white shadow-md animate-pulse'
+                      ? 'bg-[#B3261E] text-white shadow-md'
                       : 'bg-[#EDF6E8] dark:bg-[#202E1E] text-[#1C3700] dark:text-[#A2EB68] hover:bg-[#D5F7B8]'
                   }`}
                   title={isListening ? (language === 'fa' ? 'توقف ضبط' : 'Stop Dictating') : t('braindump.voiceDictation')}
@@ -592,7 +673,7 @@ export const BrainDump: React.FC<BrainDumpProps> = ({
                     id="btn-cancel-add-thought"
                     type="button"
                     onClick={() => setIsAddModalOpen(false)}
-                    className="px-4 py-2 rounded-full text-xs font-bold text-[#485B44] dark:text-[#9EB598] hover:bg-[#EDF6E8] dark:hover:bg-[#202E1E] transition-colors"
+                    className="px-4 py-2 rounded-full text-xs font-bold text-[#485B44] dark:text-[#9EB598] hover:bg-[#EDF6E8] dark:hover:bg-[#202E1E] transition-colors cursor-pointer"
                   >
                     {t('common.cancel')}
                   </button>
@@ -603,8 +684,8 @@ export const BrainDump: React.FC<BrainDumpProps> = ({
                     whileTap={{ scale: 0.97 }}
                     type="button"
                     onClick={handleAddThought}
-                    disabled={!inputText.trim()}
-                    className="px-5 py-2.5 rounded-full bg-[#80D141] hover:bg-[#72BF36] disabled:opacity-40 text-[#0F2600] font-bold text-xs sm:text-sm shadow-md flex items-center gap-1.5 transition-all"
+                    disabled={!inputText.trim() && !interimTranscript.trim()}
+                    className="px-5 py-2.5 rounded-full bg-[#80D141] hover:bg-[#72BF36] disabled:opacity-40 text-[#0F2600] font-bold text-xs sm:text-sm shadow-md flex items-center gap-1.5 transition-all cursor-pointer"
                   >
                     <Plus className="w-4 h-4 stroke-[2.5]" />
                     <span>{t('braindump.dropThoughtBtn')}</span>
@@ -685,10 +766,12 @@ export const BrainDump: React.FC<BrainDumpProps> = ({
                   <span>{t('braindump.acceptAllTidy')}</span>
                 </button>
                 <button
+                  type="button"
                   onClick={() => setTidyResult(null)}
-                  className="p-1.5 rounded-full text-[#485B44] hover:bg-[#EDF6E8] dark:hover:bg-[#202E1E]"
+                  aria-label={t('common.close', 'Close')}
+                  className="p-1.5 rounded-full text-[#485B44] hover:bg-[#EDF6E8] dark:hover:bg-[#202E1E] transition-colors cursor-pointer"
                 >
-                  ✕
+                  <X className="w-4 h-4" />
                 </button>
               </div>
             </div>

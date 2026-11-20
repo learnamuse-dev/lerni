@@ -11,20 +11,6 @@ export const ENERGY_LEVELS: { id: EnergyLevel; label: string; icon: string; name
 
 export type TimeBucket = 'morning' | 'midday' | 'evening' | 'anytime';
 
-export type ReminderIntensity = 'normal' | 'strong';
-
-export interface EntryReminder {
-  id: string;
-  // Offset in minutes before the target time (0 = at the time, 5 = 5m before, 15 = 15m before, etc.)
-  offsetMinutes: number;
-  customTime?: string; // Optional HH:mm if specific time of day is chosen
-  label?: string; // Optional custom title/label
-  enabled?: boolean; // Defaults to true
-  intensity?: ReminderIntensity; // 'normal' (single alert) | 'strong' (repeats every 3s until dismissed/snoozed)
-}
-
-export type Reminder = EntryReminder;
-
 export interface Habit {
   id: string;
   title: string;
@@ -42,7 +28,6 @@ export interface Habit {
   totalCompletions: number;
   unstickTip?: string; // Low barrier fallback prompt
   isArchived?: boolean;
-  reminders?: EntryReminder[];
 }
 
 export function isHabitActiveOnDate(habit: Habit, dateStr: string): boolean {
@@ -83,7 +68,6 @@ export interface BujoEntry {
   linkedHabitId?: string;
   createdAt: number;
   completedAt?: number;
-  reminders?: EntryReminder[];
 }
 
 export type FocusTimerMode = 'sprint_5' | 'burst_15' | 'pomodoro_25' | 'deep_45' | 'flowmodoro' | 'custom' | (string & {});
@@ -331,9 +315,6 @@ export interface UserPreferences {
   customOpenAiApiVersion?: string; // Optional API version (e.g. for Azure)
   useSharedFreeKey?: boolean; // Whether the user uses the shared community free API key
   plannerCustomInstructions?: string; // Persistent custom instructions for smart planner
-  reminderNotificationsEnabled?: boolean; // Whether browser notifications are active
-  notificationsEnabled?: boolean; // Legacy alias for reminderNotificationsEnabled
-  reminderSoundEnabled?: boolean; // Whether reminder chime is enabled
   customFocusPresets?: FocusTimerPreset[]; // User custom focus timer presets
 }
 

@@ -104,6 +104,17 @@ export const Planner: React.FC<PlannerProps> = ({
     );
   }, [showConfigModal]);
 
+  useEffect(() => {
+    if (!showConfigModal) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !showImportModal) {
+        setShowConfigModal(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showConfigModal, showImportModal]);
+
   // Planning Configuration state
   const [dayStartTime, setDayStartTime] = useState('09:00');
   const [dayEndTime, setDayEndTime] = useState('18:00');
@@ -943,8 +954,8 @@ export const Planner: React.FC<PlannerProps> = ({
                 <button
                   type="button"
                   onClick={() => setShowConfigModal(false)}
-                  className="p-2 -ml-2 rounded-xl text-[#485B44] dark:text-[#9EB598] hover:bg-[#EAEFE6] dark:hover:bg-[#1C281A] transition-colors flex items-center gap-1.5 font-medium text-sm cursor-pointer"
-                  aria-label={t('common.close', 'Close')}
+                  className="p-2 -ms-2 rounded-xl text-[#485B44] dark:text-[#9EB598] hover:bg-[#EAEFE6] dark:hover:bg-[#1C281A] transition-colors flex items-center gap-1.5 font-medium text-sm cursor-pointer"
+                  aria-label={t('common.back', 'Back')}
                 >
                   <ArrowLeft className="w-5 h-5 rtl:rotate-180" />
                   <span className="hidden sm:inline">{t('common.back', 'Back')}</span>
@@ -963,61 +974,25 @@ export const Planner: React.FC<PlannerProps> = ({
                   </div>
                 </div>
               </div>
-
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setShowConfigModal(false)}
-                  className="p-2 rounded-xl text-[#485B44] dark:text-[#9EB598] hover:text-[#151E14] dark:hover:text-[#E8F2E4] hover:bg-[#EAEFE6] dark:hover:bg-[#1C281A] transition-colors cursor-pointer"
-                  aria-label={t('common.close', 'Close')}
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
             </div>
 
             {/* Scrollable Form Content */}
             <div className="flex-1 overflow-y-auto overscroll-contain px-4 sm:px-8 py-6">
               <div className="max-w-2xl mx-auto space-y-5 text-xs">
                 {!hasActiveAiKey(prefs) && (
-                  <div className="p-4 rounded-2xl bg-[#E8F8D8]/70 dark:bg-[#1E3800]/50 border border-[#80D141]/60 text-xs text-[#1C3700] dark:text-[#E8FAD6] space-y-2.5 shadow-2xs">
-                    <div className="flex items-start gap-2.5">
-                      <Sparkles className="w-4 h-4 text-[#3B7E10] dark:text-[#80D141] shrink-0 mt-0.5" />
-                      <div className="flex-1 leading-relaxed">
-                        <span className="font-bold">
-                          {t('planner.noKeyChatbotAlternative', 'No API key? You can copy the planning prompt to use ChatGPT, Claude, or Gemini for free, then import the response here.')}
-                        </span>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2 pt-0.5 flex-wrap">
-                      <button
-                        type="button"
-                        onClick={handleCopyPlanningPrompt}
-                        className="px-3.5 py-1.5 rounded-xl bg-[#80D141] hover:bg-[#72BF36] text-[#0F2600] font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-xs transition-transform active:scale-95"
-                      >
-                        {isPromptCopied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                        <span>{isPromptCopied ? (language === 'fa' ? 'کپی شد!' : 'Copied!') : t('planner.copyPromptShort', 'Copy Prompt')}</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => {
-                          soundEngine.playPop();
-                          setShowImportModal(true);
-                        }}
-                        className="px-3 py-1.5 rounded-xl bg-white dark:bg-[#1E2E1B] border border-[#DCEAD4] dark:border-[#2B4026] text-[#2B4622] dark:text-[#C5DDC0] font-bold text-xs flex items-center gap-1.5 cursor-pointer hover:bg-[#F2F8EE]"
-                      >
-                        <ClipboardPaste className="w-3.5 h-3.5 text-[#3B7E10] dark:text-[#80D141]" />
-                        <span>{t('planner.importChatbotResponse', 'Import AI Response')}</span>
-                      </button>
-
+                  <div className="p-4 rounded-2xl bg-[#E8F8D8]/70 dark:bg-[#1E3800]/50 border border-[#80D141]/60 text-xs text-[#1C3700] dark:text-[#E8FAD6] flex items-start gap-2.5 shadow-2xs">
+                    <Sparkles className="w-4 h-4 text-[#3B7E10] dark:text-[#80D141] shrink-0 mt-0.5" />
+                    <div className="flex-1 leading-relaxed">
+                      <span className="font-bold">
+                        {t('planner.noKeyChatbotAlternative', 'No API key? You can copy the planning prompt to use ChatGPT, Claude, or Gemini for free, then import the response here.')}
+                      </span>{' '}
                       <button
                         type="button"
                         onClick={() => {
                           setShowConfigModal(false);
                           onOpenSettings();
                         }}
-                        className="px-2 py-1 text-[11px] underline text-[#485B44] dark:text-[#9EB598] hover:text-[#151E14] dark:hover:text-[#E8F2E4] cursor-pointer"
+                        className="font-bold underline text-[#2B640A] dark:text-[#80D141] hover:opacity-80 cursor-pointer"
                       >
                         {t('planner.openSettingsLink', 'Go to Settings')}
                       </button>
@@ -1123,7 +1098,7 @@ export const Planner: React.FC<PlannerProps> = ({
                             <div className="font-bold text-xs flex items-center justify-between">
                               <span>{opt.title}</span>
                               {isSelected && (
-                                <span className="w-2 h-2 rounded-full bg-[#80D141] shrink-0 ml-1"></span>
+                                <Check className="w-4 h-4 text-[#3B7E10] dark:text-[#80D141] shrink-0 ms-1" />
                               )}
                             </div>
                             <div className="text-[10px] opacity-80 mt-0.5">{opt.desc}</div>
@@ -1188,14 +1163,6 @@ export const Planner: React.FC<PlannerProps> = ({
             {/* Bottom Sticky Action Bar */}
             <div className="shrink-0 sticky bottom-0 z-20 bg-[#F7FAF4]/95 dark:bg-[#121B11]/95 backdrop-blur-md px-4 sm:px-8 py-3.5 border-t border-[#DCEAD4] dark:border-[#22301F] flex items-center justify-between gap-2.5 flex-wrap">
               <div className="flex items-center gap-2 flex-wrap">
-                <button
-                  type="button"
-                  onClick={() => setShowConfigModal(false)}
-                  className="px-4 py-2.5 rounded-xl bg-[#F2F8EE] dark:bg-[#1A2617] text-xs font-bold text-[#485B44] dark:text-[#9EB598] hover:bg-[#E2F5D1] transition-colors cursor-pointer"
-                >
-                  {t('common.cancel', 'Cancel')}
-                </button>
-
                 {/* Import AI Response Button */}
                 <button
                   type="button"

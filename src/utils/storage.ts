@@ -117,11 +117,7 @@ const DEFAULT_BUJO: BujoEntry[] = [
     energyCost: 'low',
     category: 'Work',
     tags: ['Calendar'],
-    createdAt: Date.now() - 3600000 * 3,
-    reminders: [
-      { id: 'rem-b2-1', offsetMinutes: 30, enabled: true },
-      { id: 'rem-b2-2', offsetMinutes: 0, enabled: true }
-    ]
+    createdAt: Date.now() - 3600000 * 3
   },
   {
     id: 'bujo-3',
@@ -330,8 +326,6 @@ const DEFAULT_PREFERENCES: UserPreferences = {
   customOpenAiApiVersion: (typeof import.meta !== 'undefined' && import.meta.env?.VITE_OPENAI_COMPATIBLE_API_VERSION) || '',
   useSharedFreeKey: true,
   plannerCustomInstructions: '',
-  reminderNotificationsEnabled: true,
-  reminderSoundEnabled: true,
 };
 
 const STORAGE_KEYS = {
@@ -632,14 +626,32 @@ export const storage = {
   importAllData: (jsonStr: string): boolean => {
     try {
       const parsed = JSON.parse(jsonStr);
-      if (parsed.habits) storage.saveHabits(parsed.habits);
-      if (parsed.bujo) storage.saveBujoEntries(parsed.bujo);
-      if (parsed.brainDump) storage.saveBrainDump(parsed.brainDump);
-      if (parsed.focusSessions) storage.saveFocusSessions(parsed.focusSessions);
-      if (parsed.projects) storage.saveProjects(parsed.projects);
-      if (parsed.projectTasks) storage.saveProjectTasks(parsed.projectTasks);
-      if (parsed.timeLogs) storage.saveTimeLogs(parsed.timeLogs);
-      if (parsed.prefs) storage.savePreferences(parsed.prefs);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return false;
+      }
+      const recognizedKeys = [
+        'habits',
+        'bujo',
+        'brainDump',
+        'focusSessions',
+        'projects',
+        'projectTasks',
+        'timeLogs',
+        'prefs',
+      ];
+      if (!recognizedKeys.some((k) => k in parsed)) {
+        return false;
+      }
+      if (Array.isArray(parsed.habits)) storage.saveHabits(parsed.habits);
+      if (Array.isArray(parsed.bujo)) storage.saveBujoEntries(parsed.bujo);
+      if (Array.isArray(parsed.brainDump)) storage.saveBrainDump(parsed.brainDump);
+      if (Array.isArray(parsed.focusSessions)) storage.saveFocusSessions(parsed.focusSessions);
+      if (Array.isArray(parsed.projects)) storage.saveProjects(parsed.projects);
+      if (Array.isArray(parsed.projectTasks)) storage.saveProjectTasks(parsed.projectTasks);
+      if (Array.isArray(parsed.timeLogs)) storage.saveTimeLogs(parsed.timeLogs);
+      if (parsed.prefs && typeof parsed.prefs === 'object' && !Array.isArray(parsed.prefs)) {
+        storage.savePreferences(parsed.prefs);
+      }
       return true;
     } catch (e) {
       console.error("Failed import:", e);

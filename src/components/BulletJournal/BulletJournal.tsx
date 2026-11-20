@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import confetti from 'canvas-confetti';
 import { 
@@ -24,9 +24,9 @@ import {
   CalendarDays,
   CalendarRange,
   ChevronDown,
-  Bell
+  X
 } from 'lucide-react';
-import { BujoEntry, BujoType, BujoStatus, EnergyLevel, ENERGY_LEVELS, EntryReminder } from '../../types';
+import { BujoEntry, BujoType, BujoStatus, EnergyLevel, ENERGY_LEVELS } from '../../types';
 import { soundEngine } from '../../utils/audioSynth';
 import { 
   getTodayKey, 
@@ -38,9 +38,9 @@ import { useI18n, getCategoryLabel, getEnergyLabel, toPersianDigits, formatMinut
 import { JournalCalendar } from './JournalCalendar';
 import { AddBujoModal } from './AddBujoModal';
 import { EditBujoModal } from './EditBujoModal';
+import { MigrateOverdueModal } from './MigrateOverdueModal';
 import { UnstickModal, getLocalizedTaskTitle } from '../UnstickModal';
 import { MaterialExpressiveDatePicker } from '../common/MaterialExpressiveDatePicker';
-import { QuickReminderModal } from '../common/QuickReminderModal';
 
 interface BulletJournalProps {
   entries: BujoEntry[];
@@ -72,11 +72,13 @@ export const BulletJournal: React.FC<BulletJournalProps> = ({
   const [selectedDate, setSelectedDate] = useState<string>(todayStr);
   const [journalView, setJournalView] = useState<'day' | 'calendar' | 'timeline'>('day');
   
-  // Modals
+  // Modals & Migration state
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [editingEntry, setEditingEntry] = useState<BujoEntry | null>(null);
   const [unstickEntry, setUnstickEntry] = useState<BujoEntry | null>(null);
-  const [reminderTargetEntry, setReminderTargetEntry] = useState<BujoEntry | null>(null);
+  const [isMigrateModalOpen, setIsMigrateModalOpen] = useState(false);
+  const [migratingEntryId, setMigratingEntryId] = useState<string | null>(null);
+  const [migrationNotice, setMigrationNotice] = useState<string | null>(null);
 
   // Listen for unified FAB click from App
   useEffect(() => {
@@ -122,10 +124,10 @@ export const BulletJournal: React.FC<BulletJournalProps> = ({
     }
   };
 
-  // Toggle Status: open <-> completed (clicking checked entry unchecks it)
+  // Toggle Status: open <-> completed (migrated reopens to open)
   const handleToggleStatus = (entry: BujoEntry) => {
     let nextStatus: BujoStatus = 'completed';
-    if (entry.status === 'completed') {
+    if (entry.status === 'completed' || entry.status === 'migrated') {
       nextStatus = 'open';
       soundEngine.playPop();
     } else {
@@ -165,6 +167,69 @@ export const BulletJournal: React.FC<BulletJournalProps> = ({
     onUpdateEntries(entries.filter((e) => e.id !== id));
     soundEngine.playPop();
   };
+
+  // Migrate open task(s) to targetDate: mark original as 'migrated' and carry open copy forward
+  const handleMigrateEntries = (entryIds: string[], targetDate: string) => {
+    if (!entryIds.length || !targetDate) return;
+    const idSet = new Set(entryIds);
+    const now = Date.now();
+    const newCopies: BujoEntry[] = [];
+    let seq = 0;
+
+    const updatedEntries = entries.map((entry) => {
+      if (!idSet.has(entry.id) || entry.status !== 'open' || entry.date === targetDate) {
+        return entry;
+      }
+      const cloned: BujoEntry = {
+        ...entry,
+        id: `bujo-mig-${now}-${seq}-${Math.random().toString(36).slice(2, 6)}`,
+        date: targetDate,
+        status: 'open',
+        createdAt: now + seq,
+        completedAt: undefined,
+      };
+      seq += 1;
+      newCopies.push(cloned);
+      return {
+        ...entry,
+        status: 'migrated' as BujoStatus,
+      };
+    });
+
+    if (newCopies.length === 0) return;
+
+    onUpdateEntries([...newCopies, ...updatedEntries]);
+    soundEngine.playGentleChime();
+    setMigratingEntryId(null);
+
+    const itemWord = newCopies.length === 1 ? t('journal.item') : t('journal.items');
+    const countLabel = language === 'fa' ? toPersianDigits(newCopies.length) : String(newCopies.length);
+    const dateLabel = getRelativeDayLabel(targetDate, language);
+    setMigrationNotice(
+      t('journal.migratedFeedback')
+        .replace('{count}', countLabel)
+        .replace('{items}', itemWord)
+        .replace('{date}', dateLabel)
+    );
+  };
+
+  // Auto-dismiss migration confirmation notice
+  useEffect(() => {
+    if (!migrationNotice) return;
+    const timer = window.setTimeout(() => setMigrationNotice(null), 4000);
+    return () => window.clearTimeout(timer);
+  }, [migrationNotice]);
+
+  // Overdue open tasks from previous days
+  const overdueTasks = useMemo(
+    () =>
+      entries
+        .filter((e) => e.type === 'task' && e.status === 'open' && e.date < todayStr)
+        .sort((a, b) => a.date.localeCompare(b.date)),
+    [entries, todayStr]
+  );
+
+  const tomorrowStr = shiftDate(todayStr, 1);
 
   // Quick navigation helpers
   const handlePrevDay = () => {
@@ -468,6 +533,93 @@ export const BulletJournal: React.FC<BulletJournalProps> = ({
         </AnimatePresence>
       </div>
 
+      {/* Migration Confirmation Notice */}
+      <AnimatePresence>
+        {migrationNotice && (
+          <motion.div
+            initial={{ opacity: 0, y: -6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -6 }}
+            className="px-4 py-3 rounded-2xl bg-[#E8F8D8] dark:bg-[#1E3800] border border-[#80D141]/50 flex items-center justify-between gap-3"
+          >
+            <div className="flex items-center gap-2 text-xs font-bold text-[#1C3700] dark:text-[#A2EB68]">
+              <Check className="w-4 h-4 shrink-0 stroke-[2.5]" />
+              <span>{migrationNotice}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setMigrationNotice(null)}
+              aria-label={t('common.close')}
+              className="p-1 rounded-full text-[#3B7E10] dark:text-[#80D141] hover:bg-[#DCEAD4] dark:hover:bg-[#263722] transition-colors cursor-pointer"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Overdue Tasks Migration Banner */}
+      <AnimatePresence>
+        {overdueTasks.length > 0 && (
+          <motion.div
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            className="p-4 sm:p-5 rounded-[24px] bg-amber-50/80 dark:bg-amber-950/25 border border-amber-200 dark:border-amber-800/50 flex flex-col sm:flex-row sm:items-center justify-between gap-3.5"
+          >
+            <div className="flex items-start gap-3 min-w-0">
+              <div className="w-9 h-9 rounded-xl bg-amber-100 dark:bg-amber-900/50 text-amber-800 dark:text-amber-200 flex items-center justify-center shrink-0 mt-0.5">
+                <ArrowRight className="w-4 h-4 rtl:rotate-180" />
+              </div>
+              <div className="min-w-0">
+                <h3 className="font-display text-sm font-extrabold text-[#151E14] dark:text-[#E8F2E4] tabular-nums">
+                  {overdueTasks.length === 1
+                    ? t('journal.overdueBannerSingle')
+                    : t('journal.overdueBannerPlural').replace(
+                        '{count}',
+                        language === 'fa'
+                          ? toPersianDigits(overdueTasks.length)
+                          : String(overdueTasks.length)
+                      )}
+                </h3>
+                <p className="text-xs text-[#485B44] dark:text-[#9EB598] font-medium mt-0.5">
+                  {t('journal.overdueBannerSub')}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 flex-wrap shrink-0">
+              <button
+                id="btn-bujo-migrate-all-today"
+                type="button"
+                onClick={() =>
+                  handleMigrateEntries(
+                    overdueTasks.map((task) => task.id),
+                    todayStr
+                  )
+                }
+                className="min-h-[40px] px-4 py-2 rounded-full bg-[#80D141] hover:bg-[#72BF36] text-[#0F2600] text-xs font-extrabold shadow-xs flex items-center gap-1.5 transition-all whitespace-nowrap cursor-pointer active:scale-95"
+              >
+                <ArrowRight className="w-3.5 h-3.5 rtl:rotate-180" />
+                <span>{t('journal.migrateAllToday')}</span>
+              </button>
+
+              <button
+                id="btn-bujo-review-overdue"
+                type="button"
+                onClick={() => {
+                  soundEngine.playPop();
+                  setIsMigrateModalOpen(true);
+                }}
+                className="min-h-[40px] px-4 py-2 rounded-full bg-white dark:bg-[#202E1E] hover:bg-[#EDF6E8] dark:hover:bg-[#2A3B27] text-[#151E14] dark:text-[#E8F2E4] border border-amber-300 dark:border-amber-700/60 text-xs font-bold transition-colors whitespace-nowrap cursor-pointer"
+              >
+                {t('journal.reviewMigrate')}
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Embedded Month Calendar View if selected */}
       {journalView === 'calendar' && (
         <motion.div
@@ -607,24 +759,14 @@ export const BulletJournal: React.FC<BulletJournalProps> = ({
         onOpenSettings={onOpenSettings}
       />
 
-      {/* Quick Reminder Modal */}
-      <QuickReminderModal
-        isOpen={Boolean(reminderTargetEntry)}
-        onClose={() => setReminderTargetEntry(null)}
-        title={reminderTargetEntry?.content || ''}
-        itemType={reminderTargetEntry?.type || 'task'}
-        targetTime={reminderTargetEntry?.time}
-        targetDate={reminderTargetEntry?.date}
-        reminders={reminderTargetEntry?.reminders || []}
-        onSave={(updatedReminders) => {
-          if (!reminderTargetEntry) return;
-          const updated = entries.map((e) =>
-            e.id === reminderTargetEntry.id
-              ? { ...e, reminders: updatedReminders.length > 0 ? updatedReminders : undefined }
-              : e
-          );
-          onUpdateEntries(updated);
-        }}
+      {/* Overdue Tasks Review & Migration Modal */}
+      <MigrateOverdueModal
+        isOpen={isMigrateModalOpen}
+        onClose={() => setIsMigrateModalOpen(false)}
+        overdueTasks={overdueTasks}
+        onMigrateEntries={handleMigrateEntries}
+        onCompleteEntry={handleToggleStatus}
+        onDeleteEntry={handleDeleteEntry}
       />
 
     </div>
@@ -634,6 +776,8 @@ export const BulletJournal: React.FC<BulletJournalProps> = ({
     const isTask = entry.type === 'task';
     const isCompleted = entry.status === 'completed';
     const isMigrated = entry.status === 'migrated';
+    const isOverdue = isTask && entry.status === 'open' && entry.date < todayStr;
+    const isMigratingThisCard = migratingEntryId === entry.id;
     const microSteps = entry.microSteps || [];
     const completedMicroStepsCount = microSteps.filter((s) => s.completed).length;
     const energyMeta = ENERGY_LEVELS.find((l) => l.id === entry.energyCost) || ENERGY_LEVELS[0];
@@ -671,7 +815,13 @@ export const BulletJournal: React.FC<BulletJournalProps> = ({
                   ? 'bg-amber-100 dark:bg-amber-900/60 text-amber-800 dark:text-amber-200'
                   : 'bg-[#EDF6E8] dark:bg-[#202E1E] text-[#3B7E10] dark:text-[#80D141] hover:bg-[#DDF4CD]'
               }`}
-              title={isCompleted ? t('journal.clickToUncheck') : t('journal.clickToComplete')}
+              title={
+                isCompleted
+                  ? t('journal.clickToUncheck')
+                  : isMigrated
+                  ? t('journal.clickToReopen')
+                  : t('journal.clickToComplete')
+              }
             >
               {isCompleted ? '✓' : isMigrated ? '→' : TYPE_SYMBOLS[entry.type]?.symbol || '⬜'}
             </button>
@@ -752,42 +902,12 @@ export const BulletJournal: React.FC<BulletJournalProps> = ({
                   </span>
                 )}
 
-                {/* Reminder Badge */}
-                {entry.reminders && entry.reminders.length > 0 && (() => {
-                  const hasStrong = entry.reminders.some((r) => r.intensity === 'strong');
-                  return (
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        soundEngine.playPop();
-                        setReminderTargetEntry(entry);
-                      }}
-                      className={`px-2 py-0.5 rounded-full text-[11px] font-bold inline-flex items-center gap-1 shrink-0 cursor-pointer hover:scale-105 transition-transform ${
-                        isCompleted
-                          ? 'bg-[#CCEBB6] dark:bg-[#254A20] text-[#14300B] dark:text-[#CFF3B8]'
-                          : hasStrong
-                          ? 'bg-rose-100 dark:bg-rose-950/70 text-rose-700 dark:text-rose-300 border border-rose-300 dark:border-rose-800 shadow-2xs ring-1 ring-rose-400/40'
-                          : 'bg-[#E8F8D8] dark:bg-[#1E3800] text-[#1C3700] dark:text-[#80D141] border border-[#80D141]/40 shadow-2xs'
-                      }`}
-                      title={language === 'fa' ? 'مدیریت یادآورها' : 'Manage reminders'}
-                    >
-                      {hasStrong ? (
-                        <span className="relative flex h-2 w-2">
-                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
-                          <span className="relative inline-flex rounded-full h-2 w-2 bg-rose-500"></span>
-                        </span>
-                      ) : (
-                        <Bell className="w-3 h-3 fill-current" />
-                      )}
-                      <span>
-                        {language === 'fa'
-                          ? `${toPersianDigits(entry.reminders.length)} یادآور${hasStrong ? ' (شدید)' : ''}`
-                          : `${entry.reminders.length} reminder${entry.reminders.length > 1 ? 's' : ''}${hasStrong ? ' (Strong)' : ''}`}
-                      </span>
-                    </button>
-                  );
-                })()}
+                {isOverdue && (
+                  <span className="text-[#B3261E] dark:text-[#F2B8B5] font-bold inline-flex items-center gap-1">
+                    <Clock className="w-3 h-3" />
+                    <span>{t('journal.overdue')}</span>
+                  </span>
+                )}
 
                 {isMigrated && (
                   <span className="text-amber-600 dark:text-amber-400 font-bold">
@@ -838,8 +958,8 @@ export const BulletJournal: React.FC<BulletJournalProps> = ({
               <div className="mt-3 pt-3 border-t border-[#DCEAD4] dark:border-[#263722] flex flex-wrap items-center justify-between gap-2">
                 {/* Left: Quick Actions */}
                 <div className="flex items-center gap-1.5 flex-wrap">
-                  {/* "Unstick Me" AI button on tasks */}
-                  {isTask && !isCompleted && (
+                  {/* "Unstick Me" AI button on open tasks */}
+                  {isTask && !isCompleted && !isMigrated && (
                     <motion.button
                       whileHover={{ scale: 1.05 }}
                       whileTap={{ scale: 0.95 }}
@@ -853,7 +973,7 @@ export const BulletJournal: React.FC<BulletJournalProps> = ({
                   )}
 
                   {/* Send to Timer */}
-                  {isTask && !isCompleted && (
+                  {isTask && !isCompleted && !isMigrated && (
                     <button
                       onClick={() => onSendToFocusTimer(entry.content, entry.durationMinutes || 15)}
                       className="px-3 py-1.5 rounded-full bg-[#EDF6E8] dark:bg-[#202E1E] hover:bg-[#DDF4CD] text-[#163300] dark:text-[#A2EB68] text-xs font-bold flex items-center gap-1.5 transition-all shadow-2xs"
@@ -861,6 +981,25 @@ export const BulletJournal: React.FC<BulletJournalProps> = ({
                     >
                       <Play className="w-3.5 h-3.5 fill-current" />
                       <span>{t('journal.focus')} {entry.durationMinutes ? `(${formatMinutes(entry.durationMinutes, language)})` : ''}</span>
+                    </button>
+                  )}
+
+                  {/* Migrate Task Quick Action */}
+                  {isTask && !isCompleted && !isMigrated && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        soundEngine.playPop();
+                        setMigratingEntryId(isMigratingThisCard ? null : entry.id);
+                      }}
+                      className={`px-3 py-1.5 rounded-full text-xs font-bold flex items-center gap-1.5 transition-all shadow-2xs ${
+                        isMigratingThisCard
+                          ? 'bg-amber-200 dark:bg-amber-900/70 text-amber-950 dark:text-amber-100'
+                          : 'bg-amber-50 dark:bg-amber-950/40 hover:bg-amber-100 dark:hover:bg-amber-900/50 text-amber-800 dark:text-amber-300 border border-amber-200/80 dark:border-amber-800/50'
+                      }`}
+                    >
+                      <ArrowRight className="w-3.5 h-3.5 rtl:rotate-180" />
+                      <span>{t('journal.migrate')}</span>
                     </button>
                   )}
                 </div>
@@ -879,25 +1018,6 @@ export const BulletJournal: React.FC<BulletJournalProps> = ({
                   >
                     <Star className={`w-4 h-4 ${entry.isPriority ? 'fill-current' : ''}`} />
                   </button>
-
-                  {/* Quick Reminder Toggle */}
-                  {(entry.type === 'task' || entry.type === 'event') && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        soundEngine.playPop();
-                        setReminderTargetEntry(entry);
-                      }}
-                      className={`p-1.5 rounded-full transition-all cursor-pointer ${
-                        entry.reminders && entry.reminders.length > 0
-                          ? 'text-[#2C690F] dark:text-[#9DD97A] bg-[#E8F8D8] dark:bg-[#1E3800]'
-                          : 'text-[#485B44] dark:text-[#9EB598] hover:text-[#151E14] dark:hover:text-[#E8F2E4] hover:bg-[#EDF6E8] dark:hover:bg-[#202E1E]'
-                      }`}
-                      title={language === 'fa' ? 'تنظیم یادآور' : 'Set reminder'}
-                    >
-                      <Bell className={`w-4 h-4 ${entry.reminders && entry.reminders.length > 0 ? 'fill-current' : ''}`} />
-                    </button>
-                  )}
 
                   {/* Edit */}
                   <button
@@ -921,6 +1041,46 @@ export const BulletJournal: React.FC<BulletJournalProps> = ({
                   </button>
                 </div>
               </div>
+
+              {/* Inline Target Date Selector for Single-Task Migration */}
+              {isTask && !isCompleted && !isMigrated && isMigratingThisCard && (
+                <div className="mt-2.5 pt-2.5 border-t border-dashed border-[#DCEAD4] dark:border-[#263722] flex flex-wrap items-center gap-2">
+                  <span className="text-[11px] font-bold text-[#485B44] dark:text-[#9EB598]">
+                    {t('journal.migrateTo')}
+                  </span>
+
+                  {entry.date !== todayStr && (
+                    <button
+                      type="button"
+                      onClick={() => handleMigrateEntries([entry.id], todayStr)}
+                      className="px-3 py-1.5 rounded-xl bg-[#80D141] hover:bg-[#72BF36] text-[#0F2600] text-xs font-extrabold transition-colors cursor-pointer"
+                    >
+                      {t('journal.jumpToday')}
+                    </button>
+                  )}
+
+                  {entry.date !== tomorrowStr && (
+                    <button
+                      type="button"
+                      onClick={() => handleMigrateEntries([entry.id], tomorrowStr)}
+                      className="px-3 py-1.5 rounded-xl bg-[#EDF6E8] dark:bg-[#202E1E] hover:bg-[#DCEAD4] text-[#151E14] dark:text-[#E8F2E4] border border-[#DCEAD4] dark:border-[#263722] text-xs font-bold transition-colors cursor-pointer"
+                    >
+                      {t('journal.tomorrow')}
+                    </button>
+                  )}
+
+                  <MaterialExpressiveDatePicker
+                    value={entry.date < todayStr ? todayStr : shiftDate(entry.date, 1)}
+                    onChange={(pickedDate) => {
+                      if (pickedDate && pickedDate !== entry.date) {
+                        handleMigrateEntries([entry.id], pickedDate);
+                      }
+                    }}
+                    label={t('journal.targetDate')}
+                    buttonClassName="py-1.5 px-2.5 rounded-xl text-xs"
+                  />
+                </div>
+              )}
             </motion.div>
           )}
         </AnimatePresence>

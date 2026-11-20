@@ -7,8 +7,6 @@ class SoundEngine {
   private currentType: AmbientSoundType = 'off';
   private volume: number = 0.5;
   private effectsEnabled: boolean = true;
-  private strongAlarmInterval: any = null;
-  private activeStrongAlarmIds: Set<string> = new Set();
 
   public setEffectsEnabled(enabled: boolean) {
     this.effectsEnabled = enabled;
@@ -256,128 +254,6 @@ class SoundEngine {
       osc.start(now);
       osc.stop(now + 0.09);
     } catch (e) {}
-  }
-
-  public playReminderAlert() {
-    if (!this.effectsEnabled) return;
-    try {
-      this.initContext();
-      if (!this.ctx) return;
-      const now = this.ctx.currentTime;
-      // Friendly, gentle arpeggio alert: F#4 -> A4 -> C#5 -> E5
-      const freqs = [369.99, 440.00, 554.37, 659.25];
-      freqs.forEach((freq, idx) => {
-        const osc = this.ctx!.createOscillator();
-        const noteGain = this.ctx!.createGain();
-
-        osc.type = 'sine';
-        osc.frequency.setValueAtTime(freq, now + idx * 0.1);
-
-        noteGain.gain.setValueAtTime(0.001, now + idx * 0.1);
-        noteGain.gain.exponentialRampToValueAtTime(0.22, now + idx * 0.1 + 0.02);
-        noteGain.gain.exponentialRampToValueAtTime(0.0001, now + idx * 0.1 + 0.9);
-
-        osc.connect(noteGain);
-        noteGain.connect(this.ctx!.destination);
-
-        osc.start(now + idx * 0.1);
-        osc.stop(now + idx * 0.1 + 0.95);
-      });
-    } catch (e) {
-      console.warn("Audio reminder alert error:", e);
-    }
-  }
-
-  public playStrongAlarmPulse() {
-    if (!this.effectsEnabled) return;
-    try {
-      this.initContext();
-      if (!this.ctx) return;
-      const now = this.ctx.currentTime;
-
-      // Haptic vibration pulse if supported
-      if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
-        try {
-          navigator.vibrate([400, 120, 400, 120, 400]);
-        } catch {}
-      }
-
-      // Assertive, impossible-to-miss emergency beacon pattern:
-      // High-low-high-low dual-frequency siren bursts with harmonic overtones
-      const toneBursts = [
-        { freq1: 880, freq2: 1760, delay: 0.00, dur: 0.14 },
-        { freq1: 1174, freq2: 2348, delay: 0.16, dur: 0.14 },
-        { freq1: 880, freq2: 1760, delay: 0.32, dur: 0.14 },
-        { freq1: 1174, freq2: 2348, delay: 0.48, dur: 0.22 },
-      ];
-
-      toneBursts.forEach(({ freq1, freq2, delay, dur }) => {
-        const oscPrimary = this.ctx!.createOscillator();
-        const oscHarmonic = this.ctx!.createOscillator();
-        const noteGain = this.ctx!.createGain();
-
-        oscPrimary.type = 'sawtooth';
-        oscHarmonic.type = 'sine';
-
-        oscPrimary.frequency.setValueAtTime(freq1, now + delay);
-        oscHarmonic.frequency.setValueAtTime(freq2, now + delay);
-
-        noteGain.gain.setValueAtTime(0.001, now + delay);
-        noteGain.gain.exponentialRampToValueAtTime(0.35, now + delay + 0.015);
-        noteGain.gain.exponentialRampToValueAtTime(0.0001, now + delay + dur);
-
-        oscPrimary.connect(noteGain);
-        oscHarmonic.connect(noteGain);
-        noteGain.connect(this.ctx!.destination);
-
-        oscPrimary.start(now + delay);
-        oscHarmonic.start(now + delay);
-        oscPrimary.stop(now + delay + dur + 0.02);
-        oscHarmonic.stop(now + delay + dur + 0.02);
-      });
-    } catch (e) {
-      console.warn("Strong alarm audio error:", e);
-    }
-  }
-
-  /**
-   * Starts a repeating alarm loop that pulses every 3 seconds until stopped
-   */
-  public startStrongAlarmLoop(alertId?: string) {
-    if (alertId) {
-      this.activeStrongAlarmIds.add(alertId);
-    }
-    // Play first burst immediately
-    this.playStrongAlarmPulse();
-
-    if (!this.strongAlarmInterval) {
-      this.strongAlarmInterval = setInterval(() => {
-        this.playStrongAlarmPulse();
-      }, 3000);
-    }
-  }
-
-  /**
-   * Stops repeating for a specific alert or all alerts if no IDs remain
-   */
-  public stopStrongAlarmLoop(alertId?: string) {
-    if (alertId) {
-      this.activeStrongAlarmIds.delete(alertId);
-    }
-    if (!alertId || this.activeStrongAlarmIds.size === 0) {
-      this.stopAllStrongAlarms();
-    }
-  }
-
-  /**
-   * Stops all active repeating strong alarms immediately
-   */
-  public stopAllStrongAlarms() {
-    if (this.strongAlarmInterval) {
-      clearInterval(this.strongAlarmInterval);
-      this.strongAlarmInterval = null;
-    }
-    this.activeStrongAlarmIds.clear();
   }
 }
 

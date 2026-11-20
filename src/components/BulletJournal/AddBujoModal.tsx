@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
-  X, 
   Plus, 
   Star, 
   Sparkles, 
@@ -12,14 +11,13 @@ import {
   Settings,
   ArrowLeft
 } from 'lucide-react';
-import { BujoEntry, BujoType, EnergyLevel, ENERGY_LEVELS, EntryReminder } from '../../types';
+import { BujoEntry, BujoType, EnergyLevel, ENERGY_LEVELS } from '../../types';
 import { soundEngine } from '../../utils/audioSynth';
 import { getTodayKey } from '../../utils/dateUtils';
 import { DEFAULT_JOURNAL_CATEGORIES } from '../../utils/storage';
-import { useI18n, getCategoryLabel, getEnergyLabel } from '../../utils/i18n';
+import { useI18n, getCategoryLabel, getEnergyLabel, toPersianDigits } from '../../utils/i18n';
 import { MaterialExpressiveDatePicker } from '../common/MaterialExpressiveDatePicker';
 import { MaterialExpressiveTimePicker } from '../common/MaterialExpressiveTimePicker';
-import { ReminderPicker } from '../common/ReminderPicker';
 
 interface AddBujoModalProps {
   isOpen: boolean;
@@ -58,7 +56,6 @@ export const AddBujoModal: React.FC<AddBujoModalProps> = ({
   const [energyCost, setEnergyCost] = useState<EnergyLevel>(currentEnergy);
   const [isPriority, setIsPriority] = useState(false);
   const [category, setCategory] = useState<string>(availableCategories[0] || 'General');
-  const [reminders, setReminders] = useState<EntryReminder[]>([]);
 
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -70,7 +67,6 @@ export const AddBujoModal: React.FC<AddBujoModalProps> = ({
       setDurationMinutes('');
       setContent('');
       setIsPriority(false);
-      setReminders([]);
       if (!availableCategories.includes(category)) {
         setCategory(availableCategories[0] || 'General');
       }
@@ -106,7 +102,6 @@ export const AddBujoModal: React.FC<AddBujoModalProps> = ({
       category: category.trim() || availableCategories[0] || 'General',
       tags: [category.trim() || availableCategories[0] || 'General'],
       createdAt: Date.now(),
-      reminders: reminders.length > 0 ? reminders : undefined,
     };
 
     onAddEntry(newEntry);
@@ -155,8 +150,8 @@ export const AddBujoModal: React.FC<AddBujoModalProps> = ({
                   soundEngine.playPop();
                   onClose();
                 }}
-                className="p-2 -ml-2 rounded-xl text-[#485B44] dark:text-[#9EB598] hover:bg-[#EAEFE6] dark:hover:bg-[#1C281A] transition-colors flex items-center gap-1.5 font-medium text-sm cursor-pointer"
-                aria-label={t('common.close', 'Close')}
+                className="p-2 -ms-2 rounded-xl text-[#485B44] dark:text-[#9EB598] hover:bg-[#EAEFE6] dark:hover:bg-[#1C281A] transition-colors flex items-center gap-1.5 font-medium text-sm cursor-pointer"
+                aria-label={t('common.back', 'Back')}
               >
                 <ArrowLeft className="w-5 h-5 rtl:rotate-180" />
                 <span className="hidden sm:inline">{t('common.back', 'Back')}</span>
@@ -174,31 +169,6 @@ export const AddBujoModal: React.FC<AddBujoModalProps> = ({
                   </p>
                 </div>
               </div>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  soundEngine.playPop();
-                  onClose();
-                }}
-                className="p-2 rounded-xl text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-[#F2F8EE] dark:hover:bg-[#1F2D1C] transition-colors sm:hidden"
-                aria-label={t('common.close', 'Close')}
-              >
-                <X className="w-5 h-5" />
-              </button>
-              <motion.button
-                whileHover={{ scale: 1.02 }}
-                whileTap={{ scale: 0.98 }}
-                type="button"
-                onClick={() => handleSubmit()}
-                disabled={!content.trim()}
-                className="hidden sm:flex px-6 py-2.5 rounded-xl bg-[#80D141] hover:bg-[#72BF36] disabled:opacity-40 text-[#0F2600] font-bold text-xs shadow-xs items-center gap-1.5 transition-all cursor-pointer"
-              >
-                <Plus className="w-4 h-4 stroke-[2.5]" />
-                <span>{t('journal.addEntryBtn')}</span>
-              </motion.button>
             </div>
           </div>
 
@@ -374,13 +344,13 @@ export const AddBujoModal: React.FC<AddBujoModalProps> = ({
                       setDurationMinutes(String(mins));
                       soundEngine.playPop();
                     }}
-                    className={`px-1.5 py-1.5 rounded-xl text-[10px] font-bold border transition-all active:scale-95 ${
+                    className={`px-1.5 py-1.5 rounded-xl text-[10px] font-bold border transition-all active:scale-95 tabular-nums cursor-pointer ${
                       durationMinutes === String(mins)
                         ? 'bg-[#80D141] text-[#0F2600] border-[#80D141]'
                         : 'bg-white dark:bg-[#202E1E] text-[#485B44] dark:text-[#9EB598] border-[#DCEAD4] dark:border-[#263722] hover:bg-[#EDF6E8]'
                     }`}
                   >
-                    {mins}m
+                    {language === 'fa' ? `${toPersianDigits(mins)}${t('focus.minsShort', 'د')}` : `${mins}m`}
                   </button>
                 ))}
               </div>
@@ -465,42 +435,18 @@ export const AddBujoModal: React.FC<AddBujoModalProps> = ({
           </div>
         </div>
 
-        {/* Reminders & Notifications Section (for Tasks and Events) */}
-        {(type === 'task' || type === 'event') && (
-          <div className="pt-3 border-t border-[#DCEAD4] dark:border-[#263722]">
-            <ReminderPicker
-              reminders={reminders}
-              onChange={setReminders}
-              targetTime={targetTime}
-              targetDate={targetDate}
-              itemType={type}
-            />
-          </div>
-        )}
-
       </div>
     </div>
 
           {/* Bottom Sticky Action Bar */}
-          <div className="shrink-0 sticky bottom-0 z-20 bg-[#F7FAF4]/95 dark:bg-[#121B11]/95 backdrop-blur-md px-4 sm:px-8 py-3.5 border-t border-[#DCEAD4] dark:border-[#22301F] flex items-center justify-end gap-3">
-            <button
-              type="button"
-              onClick={() => {
-                soundEngine.playPop();
-                onClose();
-              }}
-              className="px-5 py-2.5 rounded-xl bg-[#F2F8EE] dark:bg-[#1A2617] text-xs font-bold text-[#485B44] dark:text-[#9EB598] hover:bg-[#E2F5D1] transition-colors cursor-pointer"
-            >
-              {t('common.cancel')}
-            </button>
-
+          <div className="shrink-0 sticky bottom-0 z-20 bg-[#F7FAF4]/95 dark:bg-[#121B11]/95 backdrop-blur-md px-4 sm:px-8 py-3.5 border-t border-[#DCEAD4] dark:border-[#22301F] flex items-center justify-end">
             <motion.button
               whileHover={{ scale: 1.02 }}
               whileTap={{ scale: 0.98 }}
               type="button"
               onClick={() => handleSubmit()}
               disabled={!content.trim()}
-              className="flex-1 sm:flex-initial px-6 py-2.5 rounded-xl bg-[#80D141] hover:bg-[#72BF36] disabled:opacity-40 text-[#0F2600] font-bold text-xs shadow-md flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+              className="w-full sm:w-auto px-6 py-2.5 rounded-xl bg-[#80D141] hover:bg-[#72BF36] disabled:opacity-40 text-[#0F2600] font-bold text-xs shadow-md flex items-center justify-center gap-1.5 transition-all cursor-pointer"
             >
               <Plus className="w-4 h-4 stroke-[2.5]" />
               <span>{t('journal.addEntryBtn')}</span>

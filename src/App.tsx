@@ -21,16 +21,6 @@ import { FocusTracker } from './components/FocusTracker/FocusTracker';
 import { SettingsSection } from './components/SettingsSection';
 import { ParalysisBusterModal } from './components/ParalysisBusterModal';
 import { GroundingModal } from './components/GroundingModal';
-import { 
-  checkAndTriggerDueReminders, 
-  ActiveReminderAlert,
-  syncRemindersWithServiceWorker,
-  stopStrongReminderInSW,
-  notifyServiceWorkerUserEntered,
-  initBackgroundHeartbeat
-} from './utils/reminderManager';
-import { ReminderToastBanner } from './components/common/ReminderToastBanner';
-import { OfflineIndicator } from './components/OfflineIndicator';
 
 export default function App() {
   const [prefs, setPrefs] = useState<UserPreferences>(() => storage.getPreferences());
@@ -54,156 +44,6 @@ export default function App() {
   const [isGroundingOpen, setIsGroundingOpen] = useState(false);
   const [isStatusModalOpen, setIsStatusModalOpen] = useState(false);
   const [isSubModalOpen, setIsSubModalOpen] = useState(false);
-
-  // Active in-app reminder alerts
-  const [activeAlerts, setActiveAlerts] = useState<ActiveReminderAlert[]>([]);
-
-  // Synchronize scheduled reminders with Service Worker and IndexedDB for closed-app execution
-  useEffect(() => {
-    syncRemindersWithServiceWorker(bujoEntries, habits, prefs);
-  }, [bujoEntries, habits, prefs]);
-
-  // Sync before app closes or hides, and notify SW when app enters foreground
-  useEffect(() => {
-    notifyServiceWorkerUserEntered();
-
-    const handleSync = () => {
-      syncRemindersWithServiceWorker(bujoEntries, habits, prefs);
-      if (!document.hidden) {
-        notifyServiceWorkerUserEntered();
-      }
-    };
-
-    window.addEventListener('pagehide', handleSync);
-    window.addEventListener('beforeunload', handleSync);
-    document.addEventListener('visibilitychange', handleSync);
-
-    return () => {
-      window.removeEventListener('pagehide', handleSync);
-      window.removeEventListener('beforeunload', handleSync);
-      document.removeEventListener('visibilitychange', handleSync);
-    };
-  }, [bujoEntries, habits, prefs]);
-
-  // Listen to Service Worker broadcast messages (e.g. user interacted with notification actions)
-  useEffect(() => {
-    if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return;
-
-    const handleSWMessage = (event: MessageEvent) => {
-      const { type, alertId, data } = event.data || {};
-      if (type === 'REMINDER_DISMISSED') {
-        setActiveAlerts((prev) => prev.filter((a) => a.id !== alertId && a.reminderId !== data?.reminderId));
-      } else if (type === 'REMINDER_SNOOZED') {
-        setActiveAlerts((prev) => prev.filter((a) => a.id !== alertId && a.reminderId !== data?.reminderId));
-      } else if (type === 'REMINDER_OPENED_FROM_NOTIFICATION') {
-        notifyServiceWorkerUserEntered();
-        if (data && data.id) {
-          setActiveAlerts((prev) => {
-            if (prev.some((a) => a.id === data.id)) return prev;
-            return [{
-              id: data.id,
-              reminderId: data.reminderId,
-              entryId: data.entryId,
-              entryType: data.entryType,
-              title: data.title,
-              content: data.title,
-              time: data.time,
-              reminderLabel: data.label || 'Reminder',
-              offsetMinutes: data.offsetMinutes || 0,
-              triggeredAt: Date.now(),
-              intensity: data.intensity,
-            }, ...prev];
-          });
-        }
-      }
-    };
-
-    navigator.serviceWorker.addEventListener('message', handleSWMessage);
-    return () => {
-      navigator.serviceWorker.removeEventListener('message', handleSWMessage);
-    };
-  }, []);
-
-  // Background check for scheduled reminders across tasks, events, and habits
-  useEffect(() => {
-    const checkReminders = () => {
-      checkAndTriggerDueReminders(bujoEntries, habits, prefs, (alert) => {
-        setActiveAlerts((prev) => {
-          if (prev.some((a) => a.id === alert.id)) return prev;
-          return [alert, ...prev];
-        });
-      });
-    };
-
-    checkReminders();
-    const intervalId = setInterval(checkReminders, 12000);
-    // Unthrottled Web Worker heartbeat for background/inactive tabs
-    const cleanupHeartbeat = initBackgroundHeartbeat(checkReminders);
-
-    const handleFocus = () => {
-      notifyServiceWorkerUserEntered();
-      checkReminders();
-    };
-    window.addEventListener('focus', handleFocus);
-
-    return () => {
-      clearInterval(intervalId);
-      cleanupHeartbeat();
-      window.removeEventListener('focus', handleFocus);
-    };
-  }, [bujoEntries, habits, prefs]);
-
-  const handleDismissAlert = (alertId: string) => {
-    soundEngine.stopStrongAlarmLoop(alertId);
-    stopStrongReminderInSW(alertId);
-    setActiveAlerts((prev) => prev.filter((a) => a.id !== alertId));
-  };
-
-  const handleSnoozeAlert = (alert: ActiveReminderAlert, minutes: number = 5) => {
-    soundEngine.stopStrongAlarmLoop(alert.id);
-    stopStrongReminderInSW(alert.id);
-    setActiveAlerts((prev) => prev.filter((a) => a.id !== alert.id));
-
-    setTimeout(() => {
-      const isFa = prefs.language === 'fa';
-      const snoozedAlert: ActiveReminderAlert = {
-        ...alert,
-        id: `snooze-${alert.id}-${Date.now()}`,
-        reminderLabel: isFa ? `به تعویق افتاده (${minutes} دقیقه)` : `Snoozed (${minutes}m)`,
-        triggeredAt: Date.now(),
-      };
-      if (prefs.reminderSoundEnabled !== false && prefs.soundEffectsEnabled !== false) {
-        if (snoozedAlert.intensity === 'strong') {
-          soundEngine.startStrongAlarmLoop(snoozedAlert.id);
-        } else {
-          soundEngine.playGentleChime();
-        }
-      }
-      setActiveAlerts((prev) => [snoozedAlert, ...prev]);
-    }, minutes * 60 * 1000);
-  };
-
-  const handleCompleteItemFromReminder = (entryId: string, entryType: 'task' | 'event' | 'habit') => {
-    soundEngine.stopStrongAlarmLoop(entryId);
-    stopStrongReminderInSW(entryId);
-    if (entryType === 'task' || entryType === 'event') {
-      const updated = bujoEntries.map((e) =>
-        e.id === entryId ? { ...e, status: 'done' as const } : e
-      );
-      handleUpdateBujoEntries(updated);
-    } else if (entryType === 'habit') {
-      const todayStr = getTodayDateString();
-      const updated = habits.map((h) => {
-        if (h.id === entryId) {
-          const history = { ...(h.completionHistory || {}) };
-          history[todayStr] = true;
-          return { ...h, completionHistory: history };
-        }
-        return h;
-      });
-      handleUpdateHabits(updated);
-    }
-  };
 
   // Listen for section full-screen modal state changes to hide/show FAB smoothly
   useEffect(() => {
@@ -492,8 +332,6 @@ export default function App() {
                       const fallback = (prefs.navOrder && prefs.navOrder[0]) ? prefs.navOrder[0] : 'planner';
                       setActiveSection(previousSection !== 'settings' ? previousSection : fallback);
                     }}
-                    bujoEntries={bujoEntries}
-                    habits={habits}
                   />
                 </motion.div>
               )}
@@ -577,17 +415,6 @@ export default function App() {
         <GroundingModal
           isOpen={isGroundingOpen}
           onClose={() => setIsGroundingOpen(false)}
-        />
-
-        {/* Offline Status & PWA Install Prompt Indicator */}
-        <OfflineIndicator />
-
-        {/* Floating Toast Alert Banner for Due Reminders */}
-        <ReminderToastBanner
-          alerts={activeAlerts}
-          onDismiss={handleDismissAlert}
-          onSnooze={handleSnoozeAlert}
-          onCompleteItem={handleCompleteItemFromReminder}
         />
 
       </div>

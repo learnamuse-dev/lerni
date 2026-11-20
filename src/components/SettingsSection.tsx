@@ -1,16 +1,16 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { 
-  ArrowLeft, 
-  Download, 
-  Upload, 
-  Trash2, 
-  Moon, 
-  Sun, 
-  Volume2, 
-  VolumeX, 
-  Tag, 
-  Plus, 
+import {
+  ArrowLeft,
+  Download,
+  Upload,
+  Trash2,
+  Moon,
+  Sun,
+  Volume2,
+  VolumeX,
+  Tag,
+  Plus,
   RotateCcw,
   Check,
   X,
@@ -43,12 +43,10 @@ import {
   MessageSquare,
   Zap,
   Server,
-  Layers,
   Cpu,
-  ChevronDown,
-  ChevronsUpDown,
+  ChevronRight,
   Smartphone,
-  Bell,
+  Database,
 } from 'lucide-react';
 import {
   UserPreferences,
@@ -65,38 +63,24 @@ import {
   GEMINI_MODEL_PRESETS,
   OPENROUTER_MODEL_PRESETS,
   isLocalEndpoint,
-  BujoEntry,
-  Habit,
-  EntryReminder,
-  ReminderIntensity,
   FocusTimerPreset,
   DEFAULT_FOCUS_PRESETS,
 } from '../types';
-import { storage, DEFAULT_JOURNAL_CATEGORIES, getTodayDateString } from '../utils/storage';
+import { storage, DEFAULT_JOURNAL_CATEGORIES } from '../utils/storage';
 import { soundEngine } from '../utils/audioSynth';
 import { LerniMascot } from './Mascot/LerniMascot';
-import { useI18n, getCategoryLabel, translations, TranslationKey, toPersianDigits } from '../utils/i18n';
+import { useI18n, getCategoryLabel, toPersianDigits, getLocalizedFocusPreset } from '../utils/i18n';
 import { testAiConnection, testAiPrompt } from '../utils/aiScheduler';
 import { usePwaInstall } from '../utils/usePwaInstall';
-import {
-  getNotificationPermission,
-  requestNotificationPermission,
-  sendTestReminderNotification,
-  getUpcomingRemindersForDate,
-  formatReminderOffset,
-  stopStrongReminderInSW,
-  startStrongReminderInSW,
-  dispatchBrowserNotification,
-} from '../utils/reminderManager';
 
 interface SettingsSectionProps {
   prefs: UserPreferences;
   onUpdatePrefs: (updated: Partial<UserPreferences>) => void;
   onReloadAllData: () => void;
   onBack: () => void;
-  bujoEntries?: BujoEntry[];
-  habits?: Habit[];
 }
+
+type SettingsCategoryId = 'general' | 'ai' | 'workflow' | 'categories' | 'audio' | 'data';
 
 const SECTION_ICONS: Record<NavSection, React.ReactNode> = {
   planner: <CalendarCheck className="w-5 h-5" />,
@@ -111,10 +95,12 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({
   onUpdatePrefs,
   onReloadAllData,
   onBack,
-  bujoEntries = [],
-  habits = [],
 }) => {
   const { language, setLanguage, t, isRtl } = useI18n();
+
+  // Active settings category & mobile drill-down view state
+  const [activeCategory, setActiveCategory] = useState<SettingsCategoryId>('general');
+  const [mobileShowDetail, setMobileShowDetail] = useState<boolean>(false);
 
   // Local draft state of user preferences (changes are only applied when user clicks Save)
   const [draftPrefs, setDraftPrefs] = useState<UserPreferences>(() => ({ ...prefs }));
@@ -138,7 +124,8 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({
         prevPrefsRef.current.plannerCustomInstructions !== prefs.plannerCustomInstructions ||
         prevPrefsRef.current.navOrder !== prefs.navOrder ||
         prevPrefsRef.current.focusTabOrder !== prefs.focusTabOrder ||
-        prevPrefsRef.current.journalCategories !== prefs.journalCategories;
+        prevPrefsRef.current.journalCategories !== prefs.journalCategories ||
+        prevPrefsRef.current.customFocusPresets !== prefs.customFocusPresets;
 
       if (propsChanged) {
         setDraftPrefs({ ...prefs });
@@ -172,7 +159,10 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({
     }
   }, [prefs]);
 
-  const [importStatus, setImportStatus] = useState<string | null>(null);
+  const [importStatus, setImportStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [jsonTextValue, setJsonTextValue] = useState('');
+  const [jsonCopySuccess, setJsonCopySuccess] = useState(false);
+  const [jsonTextStatus, setJsonTextStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [newCatInput, setNewCatInput] = useState('');
   const [catError, setCatError] = useState<string | null>(null);
   const [showCleanConfirm, setShowCleanConfirm] = useState(false);
@@ -186,7 +176,7 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({
   const [openRouterKeyInput, setOpenRouterKeyInput] = useState(prefs.openRouterApiKey || '');
   const [openRouterModelInput, setOpenRouterModelInput] = useState(prefs.openRouterModel || DEFAULT_OPENROUTER_MODEL);
 
-  // Custom OpenAI-compatible state (clean inputs, user defines everything)
+  // Custom OpenAI-compatible state
   const [customBaseUrlInput, setCustomBaseUrlInput] = useState(
     prefs.customOpenAiBaseUrl ||
       (typeof import.meta !== 'undefined' ? import.meta.env?.VITE_OPENAI_COMPATIBLE_BASE_URL : '') ||
@@ -233,202 +223,19 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({
   // PWA install prompt & standalone detection hook
   const { canInstall, isInstalled, isInstalling, isIos, promptInstall } = usePwaInstall();
 
-  // Section accordion state: track which sections are expanded
-  // Expandable sections state - keeps the settings clean and uncluttered
-  const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
-    language: true,
-    theme: false,
-    install: false,
-    ai: true,
-    planner: false,
-    navigation: false,
-    focus: false,
-    categories: false,
-    audio: false,
-    reminders: false,
-    backup: false,
-  });
-
-  const toggleSection = (id: string) => {
-    soundEngine.playPop();
-    setExpandedSections((prev) => ({ ...prev, [id]: !prev[id] }));
-  };
-
-  const allExpanded = Object.values(expandedSections).every(Boolean);
-  const toggleAllSections = () => {
-    soundEngine.playPop();
-    const nextState = !allExpanded;
-    setExpandedSections({
-      language: nextState,
-      theme: nextState,
-      install: nextState,
-      ai: nextState,
-      planner: nextState,
-      navigation: nextState,
-      focus: nextState,
-      categories: nextState,
-      audio: nextState,
-      reminders: nextState,
-      backup: nextState,
-    });
-  };
-
-  // Notification and Reminders Settings state
-  const [notifPermission, setNotifPermission] = useState<NotificationPermission | 'unsupported'>(() =>
-    getNotificationPermission()
-  );
-  const [testNotifMessage, setTestNotifMessage] = useState<string | null>(null);
-  const [isTestingNotif, setIsTestingNotif] = useState(false);
-  const [activeStrongTest, setActiveStrongTest] = useState(false);
-
-  const handleRequestNotificationPermission = async () => {
-    soundEngine.playPop();
-    const perm = await requestNotificationPermission();
-    setNotifPermission(perm);
-    if (perm === 'granted') {
-      soundEngine.playGentleChime();
-      setDraftPrefs((prev) => ({ ...prev, reminderNotificationsEnabled: true }));
-    }
-  };
-
-  const handleTestNotification = async (intensity: ReminderIntensity = 'normal') => {
-    setIsTestingNotif(true);
-    try {
-      await sendTestReminderNotification(selectedLanguage, intensity);
-      if (intensity === 'strong') {
-        setActiveStrongTest(true);
-        setTestNotifMessage(
-          isDraftFa
-            ? '🚨 یادآور شدید فعال شد (تکرار هر ۳ ثانیه)! برای توقف روی «توقف هشدار» بزنید.'
-            : '🚨 Strong reminder triggered (repeating every 3s)! Tap Stop Test to silence.'
-        );
-      } else {
-        setTestNotifMessage(
-          isDraftFa
-            ? 'اعلان معمولی و زنگ یادآور با موفقیت فعال شد!'
-            : 'Normal reminder notification & gentle audio chime triggered!'
-        );
-      }
-      setTimeout(() => setTestNotifMessage(null), 6000);
-    } catch {
-      setTestNotifMessage(
-        isDraftFa ? 'خطا در ارسال اعلان آزمایشی.' : 'Failed to trigger test reminder.'
-      );
-      setTimeout(() => setTestNotifMessage(null), 4000);
-    } finally {
-      setIsTestingNotif(false);
-    }
-  };
-
-  const handleStopStrongTest = () => {
-    soundEngine.playPop();
-    stopStrongReminderInSW('lerni-test-strong');
-    setActiveStrongTest(false);
-    setTestNotifMessage(
-      isDraftFa ? 'هشدار آزمایشی شدید متوقف شد.' : 'Strong test alarm stopped.'
-    );
-    setTimeout(() => setTestNotifMessage(null), 3000);
-  };
-
-  const handleScheduleClosedAppTest = async (intensity: ReminderIntensity = 'normal') => {
-    setIsTestingNotif(true);
-    soundEngine.playPop();
-    try {
-      const perm = getNotificationPermission();
-      if (perm !== 'granted') {
-        const reqResult = await requestNotificationPermission();
-        setNotifPermission(reqResult);
-        if (reqResult !== 'granted') {
-          setTestNotifMessage(
-            isDraftFa
-              ? 'لطفاً ابتدا دسترسی به اعلان‌ها را تایید کنید.'
-              : 'Please grant notification permissions first.'
-          );
-          setTimeout(() => setTestNotifMessage(null), 5000);
-          return;
-        }
-      }
-
-      const testId = `test-rem-${Date.now()}`;
-      const triggerTimeMs = Date.now() + 6000;
-      const title = intensity === 'strong'
-        ? (isDraftFa ? '🚨 [STRONG / شدید] یادآور ۶ ثانیه‌ای لرنی' : '🚨 [STRONG] Lerni 6s Reminder')
-        : (isDraftFa ? '🔔 یادآور ۶ ثانیه‌ای لرنی' : '🔔 Lerni 6s Reminder');
-      const body = isDraftFa
-        ? (intensity === 'strong'
-            ? 'یادآور شدید با تکرار مداوم هر ۳ ثانیه فعال شد!'
-            : 'اعلان آزمایشی ۶ ثانیه‌ای با موفقیت ارسال شد.')
-        : (intensity === 'strong'
-            ? 'Strong reminder triggered with 3s continuous repeats!'
-            : '6-second reminder test notification delivered!');
-
-      const testItem = {
-        id: testId,
-        title: isDraftFa ? 'آزمایش یادآور پس‌زمینه' : 'Background Reminder Test',
-        label: isDraftFa ? '۶ ثانیه پس از خروج' : 'Delivered 6s later',
-        time: '00:00',
-        triggerTimeMs,
-        intensity,
-        isFa: isDraftFa,
-        entryType: 'task' as const,
-      };
-
-      // Sync test item to Service Worker
-      if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.ready.then((reg) => {
-          reg.active?.postMessage({
-            type: 'SYNC_SCHEDULED_REMINDERS',
-            reminders: [testItem],
-          });
-        }).catch(() => {});
-      }
-
-      // Schedule client-side timeout so it fires reliably in active/background tab
-      setTimeout(() => {
-        if (intensity === 'strong') {
-          soundEngine.startStrongAlarmLoop(testId);
-          setActiveStrongTest(true);
-          startStrongReminderInSW(testId, title, body, { isTest: true, isFa: isDraftFa });
-        } else {
-          soundEngine.playGentleChime();
-        }
-        dispatchBrowserNotification(title, body, testId, intensity, { isTest: true, isFa: isDraftFa });
-      }, 6000);
-
-      setTestNotifMessage(
-        isDraftFa
-          ? 'یادآور ۶ ثانیه‌ای تنظیم شد! می‌توانید تب را کوچک یا ترک کنید تا دریافت اعلان را مشاهده کنید.'
-          : 'Scheduled for 6s! You can minimize or switch tabs now to test delivery.'
-      );
-      setTimeout(() => setTestNotifMessage(null), 9000);
-    } catch {
-      setTestNotifMessage(
-        isDraftFa ? 'خطا در زمان‌بندی اعلان.' : 'Failed to schedule reminder test.'
-      );
-      setTimeout(() => setTestNotifMessage(null), 4000);
-    } finally {
-      setIsTestingNotif(false);
-    }
-  };
-
   // Active language in current session and draft preview
   const selectedLanguage: Language = draftPrefs.language || language || 'en';
   const isDraftFa = selectedLanguage === 'fa';
-  const isFa = language === 'fa';
-
-  // Scheduled reminders for today (chronologically sorted)
-  const upcomingTodayReminders = React.useMemo(() => {
-    return getUpcomingRemindersForDate(
-      bujoEntries,
-      habits,
-      getTodayDateString(),
-      isDraftFa ? 'fa' : 'en'
-    );
-  }, [bujoEntries, habits, isDraftFa]);
 
   // Smart Planner Custom Instructions state
   const [plannerInstructionsInput, setPlannerInstructionsInput] = useState(prefs.plannerCustomInstructions || '');
   const [instructionsSavedMessage, setInstructionsSavedMessage] = useState<string | null>(null);
+
+  const handleSelectCategory = (id: SettingsCategoryId) => {
+    soundEngine.playPop();
+    setActiveCategory(id);
+    setMobileShowDetail(true);
+  };
 
   // Update language in draft preferences only; does not apply until user clicks Save
   const handleLanguageChange = (newLang: Language) => {
@@ -447,7 +254,11 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({
     if (e) e.preventDefault();
     soundEngine.playGentleChime();
     setDraftPrefs((prev) => ({ ...prev, plannerCustomInstructions: plannerInstructionsInput.trim() }));
-    setInstructionsSavedMessage(isDraftFa ? 'دستورالعمل‌ها ثبت شدند (برای ذخیره، روی «ذخیره» کلیک کنید)' : 'Planner custom instructions staged (click Save to apply)!');
+    setInstructionsSavedMessage(
+      isDraftFa
+        ? 'دستورالعمل‌ها ثبت شدند (برای ذخیره، روی «ذخیره» کلیک کنید)'
+        : 'Planner custom instructions staged (click Save to apply)!'
+    );
     setTimeout(() => setInstructionsSavedMessage(null), 3500);
   };
 
@@ -493,7 +304,11 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({
         openRouterModel: cleanModel,
       }));
       if (cleanOrKey) {
-        setKeySavedMessage(isDraftFa ? 'کلید OpenRouter ثبت شد (برای اعمال، روی «ذخیره» کلیک کنید)' : 'OpenRouter API key staged (click Save to apply)!');
+        setKeySavedMessage(
+          isDraftFa
+            ? 'کلید OpenRouter ثبت شد (برای اعمال، روی «ذخیره» کلیک کنید)'
+            : 'OpenRouter API key staged (click Save to apply)!'
+        );
       } else {
         setKeySavedMessage(isDraftFa ? 'کلید OpenRouter پاک شد.' : 'OpenRouter key cleared.');
       }
@@ -508,7 +323,11 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({
         useSharedFreeKey: false,
       }));
       if (clean) {
-        setKeySavedMessage(isDraftFa ? 'کلید Gemini ثبت شد (برای اعمال، روی «ذخیره» کلیک کنید)' : 'Personal Gemini API key staged (click Save to apply)!');
+        setKeySavedMessage(
+          isDraftFa
+            ? 'کلید Gemini ثبت شد (برای اعمال، روی «ذخیره» کلیک کنید)'
+            : 'Personal Gemini API key staged (click Save to apply)!'
+        );
       } else {
         setKeySavedMessage(isDraftFa ? 'کلید سفارشی پاک شد.' : 'Custom key cleared.');
       }
@@ -768,26 +587,41 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({
     }
   };
 
-  const currentNavOrder: NavSection[] = (draftPrefs.navOrder && draftPrefs.navOrder.length === 5)
-    ? draftPrefs.navOrder
-    : (prefs.navOrder && prefs.navOrder.length === 5 ? prefs.navOrder : DEFAULT_NAV_ORDER);
+  const currentNavOrder: NavSection[] =
+    draftPrefs.navOrder && draftPrefs.navOrder.length === 5
+      ? draftPrefs.navOrder
+      : prefs.navOrder && prefs.navOrder.length === 5
+      ? prefs.navOrder
+      : DEFAULT_NAV_ORDER;
 
-  const currentFocusTabOrder: FocusTab[] = (draftPrefs.focusTabOrder && draftPrefs.focusTabOrder.length === 2)
-    ? draftPrefs.focusTabOrder
-    : (prefs.focusTabOrder && prefs.focusTabOrder.length === 2 ? prefs.focusTabOrder : DEFAULT_FOCUS_TAB_ORDER);
+  const currentFocusTabOrder: FocusTab[] =
+    draftPrefs.focusTabOrder && draftPrefs.focusTabOrder.length === 2
+      ? draftPrefs.focusTabOrder
+      : prefs.focusTabOrder && prefs.focusTabOrder.length === 2
+      ? prefs.focusTabOrder
+      : DEFAULT_FOCUS_TAB_ORDER;
 
-  const currentCategories = (draftPrefs.journalCategories && draftPrefs.journalCategories.length > 0)
-    ? draftPrefs.journalCategories
-    : (prefs.journalCategories && prefs.journalCategories.length > 0 ? prefs.journalCategories : DEFAULT_JOURNAL_CATEGORIES);
+  const currentCategories =
+    draftPrefs.journalCategories && draftPrefs.journalCategories.length > 0
+      ? draftPrefs.journalCategories
+      : prefs.journalCategories && prefs.journalCategories.length > 0
+      ? prefs.journalCategories
+      : DEFAULT_JOURNAL_CATEGORIES;
 
-  const currentFocusPresets: FocusTimerPreset[] = (draftPrefs.customFocusPresets && draftPrefs.customFocusPresets.length > 0)
-    ? draftPrefs.customFocusPresets
-    : (prefs.customFocusPresets && prefs.customFocusPresets.length > 0 ? prefs.customFocusPresets : DEFAULT_FOCUS_PRESETS);
+  const currentFocusPresets: FocusTimerPreset[] =
+    draftPrefs.customFocusPresets && draftPrefs.customFocusPresets.length > 0
+      ? draftPrefs.customFocusPresets
+      : prefs.customFocusPresets && prefs.customFocusPresets.length > 0
+      ? prefs.customFocusPresets
+      : DEFAULT_FOCUS_PRESETS;
 
-  const initialNavOrder = (prefs.navOrder && prefs.navOrder.length === 5) ? prefs.navOrder : DEFAULT_NAV_ORDER;
-  const initialFocusTabOrder = (prefs.focusTabOrder && prefs.focusTabOrder.length === 2) ? prefs.focusTabOrder : DEFAULT_FOCUS_TAB_ORDER;
-  const initialCategories = (prefs.journalCategories && prefs.journalCategories.length > 0) ? prefs.journalCategories : DEFAULT_JOURNAL_CATEGORIES;
-  const initialFocusPresets = (prefs.customFocusPresets && prefs.customFocusPresets.length > 0) ? prefs.customFocusPresets : DEFAULT_FOCUS_PRESETS;
+  const initialNavOrder = prefs.navOrder && prefs.navOrder.length === 5 ? prefs.navOrder : DEFAULT_NAV_ORDER;
+  const initialFocusTabOrder =
+    prefs.focusTabOrder && prefs.focusTabOrder.length === 2 ? prefs.focusTabOrder : DEFAULT_FOCUS_TAB_ORDER;
+  const initialCategories =
+    prefs.journalCategories && prefs.journalCategories.length > 0 ? prefs.journalCategories : DEFAULT_JOURNAL_CATEGORIES;
+  const initialFocusPresets =
+    prefs.customFocusPresets && prefs.customFocusPresets.length > 0 ? prefs.customFocusPresets : DEFAULT_FOCUS_PRESETS;
 
   // Preset Editor Modal state inside Settings
   const [showSettingsPresetModal, setShowSettingsPresetModal] = useState(false);
@@ -806,8 +640,6 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({
     draftPrefs.theme !== prefs.theme ||
     (draftPrefs.soundEffectsEnabled ?? true) !== (prefs.soundEffectsEnabled ?? true) ||
     (draftPrefs.soundAlerts ?? true) !== (prefs.soundAlerts ?? true) ||
-    (draftPrefs.reminderNotificationsEnabled ?? true) !== (prefs.reminderNotificationsEnabled ?? true) ||
-    (draftPrefs.reminderSoundEnabled ?? true) !== (prefs.reminderSoundEnabled ?? true) ||
     selectedProvider !== (prefs.aiProvider || 'gemini') ||
     apiKeyInput.trim() !== (prefs.geminiApiKey || '') ||
     (geminiModelInput.trim() || DEFAULT_GEMINI_MODEL) !== (prefs.geminiModel || DEFAULT_GEMINI_MODEL) ||
@@ -841,8 +673,6 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({
       navOrder: currentNavOrder,
       focusTabOrder: currentFocusTabOrder,
       journalCategories: currentCategories,
-      reminderNotificationsEnabled: draftPrefs.reminderNotificationsEnabled ?? true,
-      reminderSoundEnabled: draftPrefs.reminderSoundEnabled ?? true,
       aiProvider: selectedProvider,
       geminiApiKey: cleanApiKey,
       geminiModel: cleanGeminiModel,
@@ -866,7 +696,6 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({
   // Discard all draft changes and return
   const handleBack = () => {
     soundEngine.playPop();
-    // Do not call onUpdatePrefs — all draft modifications are discarded!
     onBack();
   };
 
@@ -885,12 +714,13 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({
 
   const handleOpenSettingsEditPreset = (p: FocusTimerPreset) => {
     soundEngine.playPop();
+    const localized = getLocalizedFocusPreset(p, language);
     setSettingsEditingPreset(p);
     setSettingsIsCreatingPreset(false);
-    setSettingsPresetLabel(p.label);
+    setSettingsPresetLabel(localized.label);
     setSettingsPresetMinutes(p.minutes);
     setSettingsPresetIcon(p.icon || '⏱️');
-    setSettingsPresetDesc(p.desc || '');
+    setSettingsPresetDesc(localized.desc);
     setSettingsPresetError(null);
     setShowSettingsPresetModal(true);
   };
@@ -898,7 +728,7 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({
   const handleSaveSettingsPreset = () => {
     const cleanLabel = settingsPresetLabel.trim();
     if (!cleanLabel) {
-      setSettingsPresetError(isDraftFa ? 'لطفاً نام پیش‌تنظیم را وارد کنید.' : 'Please enter a preset name.');
+      setSettingsPresetError(t('focus.presetNameRequired', 'Please enter a preset name.'));
       return;
     }
     const cleanMins = Math.max(0, Math.min(360, Number(settingsPresetMinutes) || 0));
@@ -934,21 +764,21 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({
     soundEngine.playGentleChime();
     setDraftPrefs((prev) => ({ ...prev, customFocusPresets: next }));
     onUpdatePrefs({ customFocusPresets: next });
-    setSettingsPresetSuccess(isDraftFa ? 'پیش‌تنظیم با موفقیت ذخیره شد!' : 'Preset saved successfully!');
+    setSettingsPresetSuccess(t('focus.presetSaved', 'Preset saved successfully!'));
     setTimeout(() => setSettingsPresetSuccess(null), 3000);
     setShowSettingsPresetModal(false);
   };
 
   const handleDeleteSettingsPreset = (presetId: string) => {
     if (currentFocusPresets.length <= 1) {
-      setSettingsPresetError(isDraftFa ? 'حداقل یک پیش‌تنظیم باید حفظ شود.' : 'At least one preset must be kept.');
+      setSettingsPresetError(t('focus.presetKeepOneError', 'At least one preset must be kept.'));
       return;
     }
     soundEngine.playPop();
     const next = currentFocusPresets.filter((p) => p.id !== presetId);
     setDraftPrefs((prev) => ({ ...prev, customFocusPresets: next }));
     onUpdatePrefs({ customFocusPresets: next });
-    setSettingsPresetSuccess(isDraftFa ? 'پیش‌تنظیم حذف شد.' : 'Preset removed.');
+    setSettingsPresetSuccess(t('focus.presetRemoved', 'Preset removed.'));
     setTimeout(() => setSettingsPresetSuccess(null), 3000);
   };
 
@@ -956,7 +786,7 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({
     soundEngine.playPop();
     setDraftPrefs((prev) => ({ ...prev, customFocusPresets: DEFAULT_FOCUS_PRESETS }));
     onUpdatePrefs({ customFocusPresets: DEFAULT_FOCUS_PRESETS });
-    setSettingsPresetSuccess(isDraftFa ? 'پیش‌تنظیم‌ها به پیش‌فرض بازگشتند.' : 'Presets restored to defaults.');
+    setSettingsPresetSuccess(t('focus.presetsRestored', 'Presets restored to defaults.'));
     setTimeout(() => setSettingsPresetSuccess(null), 3000);
     setShowSettingsPresetModal(false);
   };
@@ -979,7 +809,7 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({
     setDraftPrefs((prev) => ({ ...prev, navOrder: DEFAULT_NAV_ORDER }));
   };
 
-  // Reorder Timer Section Tabs (Focus vs Tracker) Handlers
+  // Reorder Timer Section Tabs Handlers
   const handleMoveTimerTab = (index: number, direction: 'up' | 'down') => {
     const targetIndex = direction === 'up' ? index - 1 : index + 1;
     if (targetIndex < 0 || targetIndex >= currentFocusTabOrder.length) return;
@@ -1057,15 +887,65 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({
       if (content) {
         const success = storage.importAllData(content);
         if (success) {
-          setImportStatus(isDraftFa ? 'اطلاعات با موفقیت بازیابی شد!' : 'Data successfully restored!');
+          setImportStatus({
+            type: 'success',
+            message: t('settings.importSuccess', 'Data successfully restored!'),
+          });
           soundEngine.playGentleChime();
           onReloadAllData();
         } else {
-          setImportStatus(isDraftFa ? 'خطا در خواندن فایل JSON.' : 'Failed to parse JSON file.');
+          setImportStatus({
+            type: 'error',
+            message: t('settings.importError', 'Invalid backup JSON. Please check the content and try again.'),
+          });
         }
       }
     };
     reader.readAsText(file);
+  };
+
+  const handleCopyBackupJson = async () => {
+    const json = storage.exportAllData();
+    setJsonTextValue(json);
+    try {
+      await navigator.clipboard.writeText(json);
+      soundEngine.playGentleChime();
+      setJsonCopySuccess(true);
+      setJsonTextStatus({
+        type: 'success',
+        message: t('settings.copiedJsonBtn', 'JSON Copied!'),
+      });
+      setTimeout(() => setJsonCopySuccess(false), 2500);
+    } catch {
+      soundEngine.playPop();
+      setJsonTextStatus(null);
+    }
+  };
+
+  const handleLoadBackupJson = () => {
+    soundEngine.playPop();
+    setJsonTextValue(storage.exportAllData());
+    setJsonTextStatus(null);
+  };
+
+  const handleRestoreFromJsonText = () => {
+    const trimmed = jsonTextValue.trim();
+    if (!trimmed) return;
+    const success = storage.importAllData(trimmed);
+    if (success) {
+      soundEngine.playGentleChime();
+      setJsonTextStatus({
+        type: 'success',
+        message: t('settings.importSuccess', 'Data successfully restored!'),
+      });
+      onReloadAllData();
+    } else {
+      soundEngine.playPop();
+      setJsonTextStatus({
+        type: 'error',
+        message: t('settings.importError', 'Invalid backup JSON. Please check the content and try again.'),
+      });
+    }
   };
 
   const handleCleanPredefinedData = () => {
@@ -1098,45 +978,153 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({
     setTimeout(() => setResetSuccessMessage(null), 4500);
   };
 
-  return (
-    <div dir={isRtl ? 'rtl' : 'ltr'} className="w-full max-w-5xl mx-auto px-3 sm:px-6 py-2 space-y-6">
-      
-      {/* Header: Cancel on start, Save on end, Pending changes banner below, Title below */}
-      <div className="space-y-3 pb-4 border-b border-[#D8E8D0] dark:border-[#22301F]">
-        {/* Top Control Bar with Cancel and Save */}
-        <div className="flex items-center justify-between">
-          <motion.button
-            id="btn-settings-cancel"
-            type="button"
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
-            onClick={handleBack}
-            className="flex items-center gap-1.5 px-3.5 py-2 rounded-2xl bg-[#EDF6E8] dark:bg-[#1E2B1A] hover:bg-[#E2F2D9] dark:hover:bg-[#283A23] text-[#3B4E37] dark:text-[#B6CCB0] hover:text-[#151E14] dark:hover:text-[#E8F2E4] text-xs font-bold border border-[#D8E8D0] dark:border-[#273722] transition-colors shadow-2xs cursor-pointer"
-            title={isDraftFa ? 'انصراف' : 'Cancel'}
-          >
-            <ArrowLeft className="w-4 h-4 rtl:rotate-180" />
-            <span>{t('common.cancel', 'Cancel')}</span>
-          </motion.button>
+  // Grouped sidebar categories with quiet live summaries
+  const categoryGroups: {
+    groupLabel: string;
+    items: {
+      id: SettingsCategoryId;
+      label: string;
+      desc: string;
+      summary: string;
+      icon: React.ReactNode;
+    }[];
+  }[] = [
+    {
+      groupLabel: t('settings.groupPreferences', 'Preferences'),
+      items: [
+        {
+          id: 'general',
+          label: t('settings.catGeneral', 'General & Appearance'),
+          desc: t('settings.catGeneralDesc', 'Language, theme, and app installation'),
+          summary: `${selectedLanguage === 'fa' ? 'فارسی' : 'English'} · ${
+            draftPrefs.theme === 'dark'
+              ? isDraftFa
+                ? 'تیره جنگلی'
+                : 'Forest Dark'
+              : isDraftFa
+              ? 'روشن ملایم'
+              : 'Gentle Light'
+          }`,
+          icon: <Globe className="w-4 h-4" />,
+        },
+        {
+          id: 'audio',
+          label: t('settings.catAudio', 'Audio & Sensory'),
+          desc: t('settings.catAudioDesc', 'Sound effects and completion chimes'),
+          summary:
+            draftPrefs.soundEffectsEnabled ?? true
+              ? isDraftFa
+                ? 'صدا فعال'
+                : 'Sound On'
+              : isDraftFa
+              ? 'بی‌صدا'
+              : 'Muted',
+          icon: (draftPrefs.soundEffectsEnabled ?? true) ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />,
+        },
+      ],
+    },
+    {
+      groupLabel: t('settings.groupWorkflowAi', 'Workflow & AI'),
+      items: [
+        {
+          id: 'ai',
+          label: t('settings.catAi', 'AI & Smart Planner'),
+          desc: t('settings.catAiDesc', 'Provider, API keys, test playground, and planner rules'),
+          summary:
+            selectedProvider === 'custom'
+              ? customModelInput || (isDraftFa ? 'API سفارشی' : 'Custom OpenAI')
+              : selectedProvider === 'openrouter'
+              ? `OpenRouter · ${openRouterModelInput ? openRouterModelInput.split('/')[1] || openRouterModelInput : 'Default'}`
+              : `Gemini · ${geminiModelInput ? geminiModelInput.replace('gemini-', '') : 'Flash'}`,
+          icon: <Sparkles className="w-4 h-4" />,
+        },
+        {
+          id: 'workflow',
+          label: t('settings.catWorkflow', 'Focus & Navigation'),
+          desc: t('settings.catWorkflowDesc', 'Tab order and focus timer presets'),
+          summary: isDraftFa
+            ? `${toPersianDigits(currentFocusPresets.length)} پیش‌تنظیم`
+            : `${currentFocusPresets.length} presets`,
+          icon: <Timer className="w-4 h-4" />,
+        },
+        {
+          id: 'categories',
+          label: t('settings.catCategories', 'Journal Categories'),
+          desc: t('settings.catCategoriesDesc', 'Custom tags for tasks and journal entries'),
+          summary: isDraftFa
+            ? `${toPersianDigits(currentCategories.length)} برچسب`
+            : `${currentCategories.length} tags`,
+          icon: <Tag className="w-4 h-4" />,
+        },
+      ],
+    },
+    {
+      groupLabel: t('settings.groupWorkspace', 'Workspace'),
+      items: [
+        {
+          id: 'data',
+          label: t('settings.catData', 'Data & Backup'),
+          desc: t('settings.catDataDesc', 'Export, restore, and workspace reset'),
+          summary: isDraftFa ? 'نسخه پشتیبان JSON' : 'JSON export & reset',
+          icon: <Database className="w-4 h-4" />,
+        },
+      ],
+    },
+  ];
 
-          <button
-            id="btn-settings-save"
-            type="button"
-            onClick={handleDone}
-            className="px-5 py-2 rounded-full bg-[#80D141] hover:bg-[#72BF36] text-xs font-bold text-[#0F2600] shadow-sm active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer"
-            title={isDraftFa ? 'ذخیره' : 'Save'}
-          >
-            <Check className="w-4 h-4 stroke-[2.5]" />
-            <span>{isDraftFa ? 'ذخیره' : 'Save'}</span>
-          </button>
+  const allCategoryItems = categoryGroups.flatMap((g) => g.items);
+  const currentCategoryMeta = allCategoryItems.find((item) => item.id === activeCategory) || allCategoryItems[0];
+
+  return (
+    <div dir={isRtl ? 'rtl' : 'ltr'} className="w-full max-w-6xl mx-auto px-3 sm:px-6 py-2 space-y-5">
+      {/* Top Settings Header Bar */}
+      <div className="flex flex-col gap-3 pb-4 border-b border-[#D8E8D0] dark:border-[#22301F]">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-2xl bg-[#E8F8D8] dark:bg-[#1E3800] border border-[#80D141]/50 flex items-center justify-center p-1.5 shadow-2xs shrink-0">
+              <LerniMascot pose="waving" size="xs" interactive={false} />
+            </div>
+            <div className="min-w-0">
+              <h2 className="font-display text-lg sm:text-2xl font-bold tracking-tight text-[#151E14] dark:text-[#E8F2E4] truncate">
+                {t('settings.title', 'Settings & Preferences')}
+              </h2>
+              <p className="text-xs text-[#485B44] dark:text-[#9EB598] hidden sm:block truncate">
+                {t('settings.subtitle', 'Customize your executive function companion')}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0 ms-auto">
+            <button
+              id="btn-settings-cancel"
+              type="button"
+              onClick={handleBack}
+              className="min-h-[40px] flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#EDF6E8] dark:bg-[#1E2B1A] hover:bg-[#E2F2D9] dark:hover:bg-[#283A23] text-[#3B4E37] dark:text-[#B6CCB0] hover:text-[#151E14] dark:hover:text-[#E8F2E4] text-xs font-bold border border-[#D8E8D0] dark:border-[#273722] transition-colors cursor-pointer whitespace-nowrap shrink-0"
+              title={isDraftFa ? 'انصراف' : 'Cancel'}
+            >
+              <ArrowLeft className="w-4 h-4 rtl:rotate-180" />
+              <span>{t('common.cancel', 'Cancel')}</span>
+            </button>
+
+            <button
+              id="btn-settings-save"
+              type="button"
+              onClick={handleDone}
+              className="min-h-[40px] px-5 py-2 rounded-xl bg-[#80D141] hover:bg-[#72BF36] text-xs font-bold text-[#0F2600] shadow-xs active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0"
+              title={isDraftFa ? 'ذخیره' : 'Save'}
+            >
+              <Check className="w-4 h-4 stroke-[2.5]" />
+              <span>{isDraftFa ? 'ذخیره' : 'Save'}</span>
+            </button>
+          </div>
         </div>
 
-        {/* Pending changes text displayed just below the Cancel and Save buttons */}
         {hasChanges && (
           <div
             id="settings-pending-changes-banner"
-            className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/60 text-xs font-semibold text-amber-800 dark:text-amber-300"
+            className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/60 text-xs font-semibold text-amber-900 dark:text-amber-200"
           >
-            <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse shrink-0" />
+            <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
             <span>
               {isDraftFa
                 ? 'تغییراتی اعمال‌نشده وجود دارد. برای ثبت تغییرات روی «ذخیره» کلیک کنید.'
@@ -1144,2633 +1132,2094 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({
             </span>
           </div>
         )}
-
-        {/* Title and Mascot on the line below with Expand/Collapse toggle */}
-        <div className="flex items-center justify-between gap-3 pt-1 flex-wrap">
-          <div className="flex items-center gap-3.5">
-            <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-2xl bg-[#E8F8D8] dark:bg-[#1E3800] border border-[#80D141]/50 flex items-center justify-center p-1.5 shadow-xs shrink-0">
-              <LerniMascot pose="waving" size="xs" interactive={false} />
-            </div>
-            <div>
-              <h2 className="font-display text-xl sm:text-2xl font-bold tracking-tight text-[#151E14] dark:text-[#E8F2E4]">
-                {t('settings.title', 'Settings & Preferences')}
-              </h2>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2">
-            {!isInstalled && (
-              <button
-                type="button"
-                id="btn-settings-header-install"
-                onClick={promptInstall}
-                disabled={isInstalling}
-                className="px-3.5 py-1.5 rounded-xl text-xs font-bold text-[#0F2600] bg-[#80D141] hover:bg-[#72BF36] disabled:opacity-50 border border-[#80D141] flex items-center gap-1.5 transition-all shadow-2xs cursor-pointer active:scale-95"
-                title={isDraftFa ? 'نصب لرنی به عنوان برنامه مستقل روی دستگاه' : 'Install Lerni as a native app on your device'}
-              >
-                <Download className="w-3.5 h-3.5 stroke-[2.5]" />
-                <span>
-                  {isInstalling
-                    ? (isDraftFa ? 'در حال نصب...' : 'Installing...')
-                    : (isDraftFa ? 'نصب برنامه' : 'Install App')}
-                </span>
-              </button>
-            )}
-
-            <button
-              type="button"
-              onClick={toggleAllSections}
-              className="px-3.5 py-1.5 rounded-xl text-xs font-bold text-[#3B7E10] dark:text-[#80D141] bg-[#EDF6E8] dark:bg-[#1E2B1A] hover:bg-[#E2F2D9] dark:hover:bg-[#283A23] border border-[#D8E8D0] dark:border-[#273722] flex items-center gap-1.5 transition-colors cursor-pointer shadow-2xs"
-              title={allExpanded ? (isDraftFa ? 'بستن همه بخش‌ها' : 'Collapse All Sections') : (isDraftFa ? 'باز کردن همه بخش‌ها' : 'Expand All Sections')}
-            >
-              <ChevronsUpDown className="w-3.5 h-3.5" />
-              <span>{allExpanded ? (isDraftFa ? 'بستن همه' : 'Collapse All') : (isDraftFa ? 'باز کردن همه' : 'Expand All')}</span>
-            </button>
-          </div>
-        </div>
       </div>
 
-      {/* Grid Layout for Settings Options */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-
-        {/* Left Column: Language, AI Configuration, Navigation Order */}
-        <div className="lg:col-span-7 space-y-6">
-          
-          {/* Multilingual Selection (English & Persian RTL) */}
-          <section id="section-settings-language" className="rounded-[28px] bg-white dark:bg-[#182316] border border-[#D8E8D0] dark:border-[#22301F] shadow-sm transition-all duration-200 overflow-hidden">
-            <button
-              type="button"
-              onClick={() => toggleSection('language')}
-              aria-expanded={expandedSections['language']}
-              className="w-full p-4 sm:p-5 flex items-center justify-between text-start gap-3 hover:bg-[#F9FAF6] dark:hover:bg-[#1C2819] transition-colors cursor-pointer group"
-            >
-              <div className="flex items-center gap-3 min-w-0">
-                <div className="w-9 h-9 rounded-xl bg-[#E8F8D8] dark:bg-[#1E3800] border border-[#80D141]/50 flex items-center justify-center text-[#234A00] dark:text-[#80D141] shrink-0 group-hover:scale-105 transition-transform">
-                  <Globe className="w-4 h-4" />
+      {/* Main Split Shell: Side Panel (Desktop) / Category List (Mobile) + Detail Panel */}
+      <div className="flex flex-col md:flex-row gap-6 items-start">
+        {/* Left Side Panel on Desktop / Settings Index List on Mobile */}
+        <aside
+          aria-label="Settings Categories"
+          className={`${mobileShowDetail ? 'hidden md:block' : 'block'} w-full md:w-64 lg:w-72 shrink-0 md:sticky md:top-[84px]`}
+        >
+          {/* Desktop Sidebar Navigation */}
+          <nav className="hidden md:flex flex-col gap-5 rounded-[24px] bg-white dark:bg-[#182316] border border-[#D8E8D0] dark:border-[#22301F] p-3 shadow-xs">
+            {categoryGroups.map((group) => (
+              <div key={group.groupLabel} className="space-y-1">
+                <div className="px-3 py-1 text-xs font-semibold text-[#556D50] dark:text-[#8EA887]">
+                  {group.groupLabel}
                 </div>
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <h3 className="font-display text-sm sm:text-base font-bold text-[#151E14] dark:text-[#E8F2E4]">
-                      {t('settings.languageSection', 'Language & Direction')}
-                    </h3>
-                    <span className="text-[11px] font-semibold text-[#3B7E10] dark:text-[#80D141] px-2 py-0.5 rounded-full bg-[#E8F8D8] dark:bg-[#1E3800] border border-[#80D141]/30">
-                      {selectedLanguage === 'fa' ? 'فارسی (RTL)' : 'English (LTR)'}
-                    </span>
-                  </div>
-                  <p className="text-xs text-[#485B44] dark:text-[#9EB598] truncate">
-                    {t('settings.languageDesc', 'Select your preferred interface language')}
-                  </p>
-                </div>
-              </div>
-
-              <div className="w-8 h-8 rounded-full flex items-center justify-center text-[#485B44] dark:text-[#9EB598] group-hover:text-[#151E14] dark:group-hover:text-[#E8F2E4] group-hover:bg-[#EDF6E8] dark:group-hover:bg-[#202E1E] transition-colors shrink-0">
-                <ChevronDown className={`w-4 h-4 transition-transform duration-200 ${expandedSections['language'] ? 'rotate-180' : ''}`} />
-              </div>
-            </button>
-
-            <AnimatePresence initial={false}>
-              {expandedSections['language'] && (
-                <motion.div
-                  initial={{ height: 0, opacity: 0 }}
-                  animate={{ height: 'auto', opacity: 1 }}
-                  exit={{ height: 0, opacity: 0 }}
-                  transition={{ duration: 0.22, ease: 'easeInOut' }}
-                >
-                  <div className="px-5 pb-5 sm:px-6 sm:pb-6 pt-2 border-t border-[#DCEAD4]/80 dark:border-[#263722] space-y-4">
-                    {/* Language Toggle Cards */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-                      {/* English (LTR) */}
+                <div className="space-y-1">
+                  {group.items.map((item) => {
+                    const isActive = activeCategory === item.id;
+                    return (
                       <button
-                        id="btn-lang-en"
+                        key={item.id}
+                        id={`settings-sidebar-tab-${item.id}`}
                         type="button"
-                        onClick={() => handleLanguageChange('en')}
-                        className={`p-4 rounded-2xl flex items-center justify-between border transition-all text-start cursor-pointer ${
-                          selectedLanguage === 'en'
-                            ? 'bg-[#80D141]/15 dark:bg-[#80D141]/20 border-[#80D141] shadow-xs ring-1 ring-[#80D141]'
-                            : 'bg-[#F7FAF4] dark:bg-[#1C2919] text-[#485B44] dark:text-[#9EB598] border-[#DCEAD4] dark:border-[#2A3E26] hover:bg-[#E2F5D1]'
+                        onClick={() => handleSelectCategory(item.id)}
+                        className={`w-full min-h-[42px] px-3 py-2 rounded-xl flex items-center gap-3 text-start text-xs transition-colors cursor-pointer ${
+                          isActive
+                            ? 'bg-[#E8F8D8] dark:bg-[#1E3800] text-[#151E14] dark:text-[#E8F2E4] font-bold shadow-2xs'
+                            : 'text-[#485B44] dark:text-[#9EB598] hover:bg-[#F4F8F0] dark:hover:bg-[#1E2B1A] hover:text-[#151E14] dark:hover:text-[#E8F2E4] font-medium'
                         }`}
                       >
-                        <div>
-                          <div className="text-xs font-bold text-[#151E14] dark:text-[#E8F2E4]">
-                            English
+                        <span
+                          className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 transition-colors ${
+                            isActive
+                              ? 'bg-[#80D141] text-[#0F2600]'
+                              : 'bg-[#EDF6E8] dark:bg-[#22301F] text-[#3B4E37] dark:text-[#9EB598]'
+                          }`}
+                        >
+                          {item.icon}
+                        </span>
+                        <span className="truncate flex-1">{item.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </nav>
+
+          {/* Mobile Settings Category List */}
+          <div className="md:hidden space-y-4">
+            {categoryGroups.map((group) => (
+              <div key={group.groupLabel} className="space-y-1.5">
+                <div className="px-1.5 text-xs font-semibold text-[#556D50] dark:text-[#8EA887]">
+                  {group.groupLabel}
+                </div>
+                <div className="rounded-2xl bg-white dark:bg-[#182316] border border-[#D8E8D0] dark:border-[#22301F] divide-y divide-[#DCEAD4]/75 dark:divide-[#263722] overflow-hidden shadow-xs">
+                  {group.items.map((item) => (
+                    <button
+                      key={item.id}
+                      id={`settings-mobile-row-${item.id}`}
+                      type="button"
+                      onClick={() => handleSelectCategory(item.id)}
+                      className="w-full min-h-[60px] px-4 py-3 flex items-center justify-between gap-3 text-start hover:bg-[#F7FAF4] dark:hover:bg-[#1C2819] active:bg-[#EDF6E8] dark:active:bg-[#22301F] transition-colors cursor-pointer"
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="w-9 h-9 rounded-xl bg-[#E8F8D8] dark:bg-[#1E3800] border border-[#80D141]/40 text-[#234A00] dark:text-[#80D141] flex items-center justify-center shrink-0">
+                          {item.icon}
+                        </div>
+                        <div className="min-w-0">
+                          <div className="text-sm font-bold text-[#151E14] dark:text-[#E8F2E4] truncate">
+                            {item.label}
                           </div>
-                          <div className="text-[10px] text-[#485B44] dark:text-[#9EB598]">
-                            Left-to-Right (LTR)
+                          <div className="text-xs text-[#485B44] dark:text-[#9EB598] truncate mt-0.5">
+                            {item.summary}
                           </div>
                         </div>
-                        {selectedLanguage === 'en' && (
-                          <div className="w-6 h-6 rounded-full bg-[#80D141] text-[#0F2600] flex items-center justify-center">
-                            <Check className="w-3.5 h-3.5 stroke-[3]" />
-                          </div>
-                        )}
-                      </button>
+                      </div>
+                      <ChevronRight className="w-4 h-4 text-[#556D50] dark:text-[#8EA887] shrink-0 rtl:rotate-180" />
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </aside>
 
-                      {/* Persian (RTL) */}
-                      <button
-                        id="btn-lang-fa"
-                        type="button"
-                        onClick={() => handleLanguageChange('fa')}
-                        className={`p-4 rounded-2xl flex items-center justify-between border transition-all text-start cursor-pointer ${
-                          selectedLanguage === 'fa'
-                            ? 'bg-[#80D141]/15 dark:bg-[#80D141]/20 border-[#80D141] shadow-xs ring-1 ring-[#80D141]'
-                            : 'bg-[#F7FAF4] dark:bg-[#1C2919] text-[#485B44] dark:text-[#9EB598] border-[#DCEAD4] dark:border-[#2A3E26] hover:bg-[#E2F5D1]'
-                        }`}
-                      >
-                        <div>
-                          <div className="text-xs font-bold text-[#151E14] dark:text-[#E8F2E4]">
-                            فارسی (Persian)
-                          </div>
-                          <div className="text-[10px] text-[#485B44] dark:text-[#9EB598]">
-                            راست‌به‌چپ (RTL)
-                          </div>
-                        </div>
-                        {selectedLanguage === 'fa' && (
-                          <div className="w-6 h-6 rounded-full bg-[#80D141] text-[#0F2600] flex items-center justify-center">
-                            <Check className="w-3.5 h-3.5 stroke-[3]" />
-                          </div>
-                        )}
-                      </button>
-                    </div>
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </section>
-
-          {/* Theme & Visuals (Expandable) */}
-          <section id="section-settings-theme" className="rounded-[28px] bg-white dark:bg-[#182316] border border-[#D8E8D0] dark:border-[#22301F] shadow-sm transition-all duration-200 overflow-hidden">
+        {/* Right Detail Panel (Desktop always visible; Mobile visible when a category is selected) */}
+        <section
+          aria-live="polite"
+          className={`${mobileShowDetail ? 'block' : 'hidden md:block'} flex-1 min-w-0 w-full`}
+        >
+          {/* Mobile Subheader to return to category list */}
+          <div className="md:hidden mb-3 flex items-center justify-between gap-2">
             <button
+              id="btn-settings-mobile-back"
               type="button"
-              onClick={() => toggleSection('theme')}
-              aria-expanded={expandedSections['theme']}
-              className="w-full p-4 sm:p-5 flex items-center justify-between text-start gap-3 hover:bg-[#F9FAF6] dark:hover:bg-[#1C2819] transition-colors cursor-pointer group"
-            >
-              <div className="flex items-center gap-3 min-w-0">
-                <div className="w-9 h-9 rounded-xl bg-[#E8F8D8] dark:bg-[#1E3800] border border-[#80D141]/50 flex items-center justify-center text-[#234A00] dark:text-[#80D141] shrink-0 group-hover:scale-105 transition-transform">
-                  {draftPrefs.theme === 'dark' ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
-                </div>
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <h3 className="font-display text-sm sm:text-base font-bold text-[#151E14] dark:text-[#E8F2E4]">
-                      {t('settings.themeSection', 'Visual Theme')}
-                    </h3>
-                    <span className="text-[11px] font-semibold text-[#3B7E10] dark:text-[#80D141] px-2 py-0.5 rounded-full bg-[#E8F8D8] dark:bg-[#1E3800] border border-[#80D141]/30">
-                      {draftPrefs.theme === 'dark' ? (isDraftFa ? 'تیره جنگلی' : 'Forest Dark') : (isDraftFa ? 'روشن ملایم' : 'Gentle Light')}
-                    </span>
-                  </div>
-                  <p className="text-xs text-[#485B44] dark:text-[#9EB598] truncate">
-                    {t('settings.themeDesc', 'Eye-safe Forest Dark or Gentle Light')}
-                  </p>
-                </div>
-              </div>
-
-              <div className="w-8 h-8 rounded-full flex items-center justify-center text-[#485B44] dark:text-[#9EB598] group-hover:text-[#151E14] dark:group-hover:text-[#E8F2E4] group-hover:bg-[#EDF6E8] dark:group-hover:bg-[#202E1E] transition-colors shrink-0">
-                <ChevronDown className={`w-4 h-4 transition-transform duration-200 ${expandedSections['theme'] ? 'rotate-180' : ''}`} />
-              </div>
-            </button>
-
-            <AnimatePresence initial={false}>
-              {expandedSections['theme'] && (
-                <motion.div
-                  initial={{ height: 0, opacity: 0 }}
-                  animate={{ height: 'auto', opacity: 1 }}
-                  exit={{ height: 0, opacity: 0 }}
-                  transition={{ duration: 0.22, ease: 'easeInOut' }}
-                >
-                  <div className="px-5 pb-5 sm:px-6 sm:pb-6 pt-2 border-t border-[#DCEAD4]/80 dark:border-[#263722] space-y-4">
-                    <div className="grid grid-cols-2 gap-2 pt-1">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setDraftPrefs((prev) => ({ ...prev, theme: 'dark' }));
-                          onUpdatePrefs({ theme: 'dark' });
-                          soundEngine.playPop();
-                        }}
-                        className={`py-3 px-3 rounded-2xl text-xs font-bold flex items-center justify-center gap-2 border transition-all cursor-pointer ${
-                          draftPrefs.theme === 'dark'
-                            ? 'bg-[#80D141] text-[#0F2600] border-[#80D141] shadow-xs'
-                            : 'bg-[#F7FAF4] dark:bg-[#1C2919] text-[#485B44] dark:text-[#9EB598] border-[#DCEAD4] dark:border-[#2A3E26] hover:bg-[#E2F5D1]'
-                        }`}
-                      >
-                        <Moon className="w-4 h-4" />
-                        <span>{t('settings.themeDark', 'Forest Dark')}</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setDraftPrefs((prev) => ({ ...prev, theme: 'light' }));
-                          onUpdatePrefs({ theme: 'light' });
-                          soundEngine.playPop();
-                        }}
-                        className={`py-3 px-3 rounded-2xl text-xs font-bold flex items-center justify-center gap-2 border transition-all cursor-pointer ${
-                          draftPrefs.theme === 'light'
-                            ? 'bg-[#80D141] text-[#0F2600] border-[#80D141] shadow-xs'
-                            : 'bg-[#F7FAF4] dark:bg-[#1C2919] text-[#485B44] dark:text-[#9EB598] border-[#DCEAD4] dark:border-[#2A3E26] hover:bg-[#E2F5D1]'
-                        }`}
-                      >
-                        <Sun className="w-4 h-4" />
-                        <span>{t('settings.themeLight', 'Gentle Light')}</span>
-                      </button>
-                    </div>
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </section>
-
-          {/* Feature: Install Application (PWA - Expandable) */}
-          <section id="section-settings-install" className="rounded-[28px] bg-white dark:bg-[#182316] border border-[#D8E8D0] dark:border-[#22301F] shadow-sm transition-all duration-200 overflow-hidden">
-            <div
-              role="button"
-              tabIndex={0}
-              onClick={() => toggleSection('install')}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault();
-                  toggleSection('install');
-                }
+              onClick={() => {
+                soundEngine.playPop();
+                setMobileShowDetail(false);
               }}
-              aria-expanded={expandedSections['install']}
-              className="w-full p-4 sm:p-5 flex items-center justify-between text-start gap-3 hover:bg-[#F9FAF6] dark:hover:bg-[#1C2819] transition-colors cursor-pointer group"
+              className="min-h-[40px] px-3 py-1.5 rounded-xl bg-white dark:bg-[#182316] border border-[#D8E8D0] dark:border-[#22301F] text-xs font-bold text-[#3B4E37] dark:text-[#B6CCB0] flex items-center gap-1.5 cursor-pointer shadow-2xs"
             >
-              <div className="flex items-center gap-3 min-w-0">
-                <div className="w-9 h-9 rounded-xl bg-[#E8F8D8] dark:bg-[#1E3800] border border-[#80D141]/50 flex items-center justify-center text-[#234A00] dark:text-[#80D141] shrink-0 group-hover:scale-105 transition-transform">
-                  <Smartphone className="w-4 h-4" />
-                </div>
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <h3 className="font-display text-sm sm:text-base font-bold text-[#151E14] dark:text-[#E8F2E4]">
-                      {t('settings.installAppSection', 'Install Application')}
-                    </h3>
-                    {isInstalled ? (
-                      <span className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-300 px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/60 border border-emerald-300 dark:border-emerald-800 flex items-center gap-1">
-                        <CheckCircle2 className="w-3 h-3" />
-                        <span>{isDraftFa ? 'نصب شده' : 'Installed'}</span>
-                      </span>
-                    ) : canInstall ? (
-                      <span className="text-[11px] font-semibold text-[#3B7E10] dark:text-[#80D141] px-2 py-0.5 rounded-full bg-[#E8F8D8] dark:bg-[#1E3800] border border-[#80D141]/30">
-                        {isDraftFa ? 'آماده نصب' : 'Ready to Install'}
-                      </span>
-                    ) : (
-                      <span className="text-[11px] font-semibold text-[#485B44] dark:text-[#9EB598] px-2 py-0.5 rounded-full bg-[#EDF6E8] dark:bg-[#1E2B1A] border border-[#D8E8D0] dark:border-[#273722]">
-                        {isDraftFa ? 'وب‌اپلیکیشن' : 'Web App'}
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-xs text-[#485B44] dark:text-[#9EB598] truncate">
-                    {t('settings.installAppDesc', 'Install Lerni as a native app on your phone, tablet, or desktop')}
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2 shrink-0">
-                {!isInstalled && (
-                  <button
-                    type="button"
-                    onClick={async (e) => {
-                      e.stopPropagation();
-                      await promptInstall();
-                    }}
-                    disabled={isInstalling || (!canInstall && !isIos)}
-                    className="px-2.5 py-1 rounded-full text-xs font-bold text-[#0F2600] bg-[#80D141] hover:bg-[#72BF36] disabled:opacity-40 border border-[#80D141] flex items-center gap-1 transition-colors cursor-pointer"
-                    title={isDraftFa ? 'نصب برنامه' : 'Install App'}
-                  >
-                    <Download className="w-3 h-3 stroke-[2.5]" />
-                    <span className="hidden sm:inline">
-                      {isInstalling
-                        ? (isDraftFa ? 'در حال نصب...' : 'Installing...')
-                        : (isDraftFa ? 'نصب برنامه' : 'Install App')}
-                    </span>
-                  </button>
-                )}
-                <div className="w-8 h-8 rounded-full flex items-center justify-center text-[#485B44] dark:text-[#9EB598] group-hover:text-[#151E14] dark:group-hover:text-[#E8F2E4] group-hover:bg-[#EDF6E8] dark:group-hover:bg-[#202E1E] transition-colors">
-                  <ChevronDown className={`w-4 h-4 transition-transform duration-200 ${expandedSections['install'] ? 'rotate-180' : ''}`} />
-                </div>
-              </div>
-            </div>
-
-            <AnimatePresence initial={false}>
-              {expandedSections['install'] && (
-                <motion.div
-                  initial={{ height: 0, opacity: 0 }}
-                  animate={{ height: 'auto', opacity: 1 }}
-                  exit={{ height: 0, opacity: 0 }}
-                  transition={{ duration: 0.22, ease: 'easeInOut' }}
-                >
-                  <div className="px-5 pb-5 sm:px-6 sm:pb-6 pt-2 border-t border-[#DCEAD4]/80 dark:border-[#263722] space-y-4">
-                    <p className="text-xs text-[#485B44] dark:text-[#9EB598] leading-relaxed">
-                      {t('settings.installAppDesc', 'Install Lerni as a native app on your phone, tablet, or desktop for instant access and distraction-free offline use.')}
-                    </p>
-
-                    {isInstalled ? (
-                      <div className="p-3.5 rounded-2xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-300 dark:border-emerald-800 text-xs font-medium text-emerald-900 dark:text-emerald-200 flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-xl bg-emerald-100 dark:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 flex items-center justify-center shrink-0">
-                          <CheckCircle2 className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
-                        </div>
-                        <div>
-                          <div className="font-bold text-sm text-emerald-950 dark:text-emerald-100">
-                            {isDraftFa ? 'برنامه نصب شده و آماده استفاده است' : 'Application Installed & Running'}
-                          </div>
-                          <div className="text-[11px] opacity-80 mt-0.5">
-                            {t('settings.appInstalledDesc', 'Lerni is running as an installed standalone application on this device.')}
-                          </div>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="space-y-3">
-                        <div className="p-3.5 rounded-2xl bg-[#F7FAF4] dark:bg-[#1C2919] border border-[#DCEAD4] dark:border-[#2A3E26] flex items-center justify-between gap-3 flex-wrap">
-                          <div className="min-w-0">
-                            <div className="text-xs font-bold text-[#151E14] dark:text-[#E8F2E4]">
-                              {isDraftFa ? 'افزودن به صفحه اصلی و برنامه‌ها' : 'Add to Home Screen & Apps'}
-                            </div>
-                            <div className="text-[11px] text-[#485B44] dark:text-[#9EB598] mt-0.5">
-                              {t('settings.installReadyDesc', 'Tap the button below to add Lerni to your home screen or desktop application launcher.')}
-                            </div>
-                          </div>
-
-                          <button
-                            type="button"
-                            id="btn-settings-install-app-main"
-                            onClick={promptInstall}
-                            disabled={isInstalling || (!canInstall && !isIos)}
-                            className="px-5 py-2.5 rounded-2xl bg-[#80D141] hover:bg-[#72BF36] disabled:opacity-50 text-[#0F2600] text-xs font-bold shadow-xs flex items-center gap-2 transition-all cursor-pointer active:scale-95 shrink-0"
-                          >
-                            <Download className="w-4 h-4 stroke-[2.5]" />
-                            <span>
-                              {isInstalling
-                                ? t('settings.installing', 'Installing...')
-                                : t('settings.installBtn', 'Install App')}
-                            </span>
-                          </button>
-                        </div>
-
-                        {isIos ? (
-                          <div className="p-3.5 rounded-2xl bg-[#F7FAF4] dark:bg-[#1C2919] border border-[#DCEAD4] dark:border-[#2A3E26] text-xs text-[#3B4E37] dark:text-[#A6BC9F] flex items-start gap-2.5">
-                            <span className="text-base shrink-0">📱</span>
-                            <div className="text-[11px] leading-relaxed">
-                              <span className="font-bold text-[#151E14] dark:text-[#E8F2E4] block mb-0.5">
-                                {isDraftFa ? 'راهنمای نصب در آیفون و آی‌پد (iOS):' : 'Installation on iOS (iPhone / iPad):'}
-                              </span>
-                              {t('settings.installManualIos', 'To install on iOS: Tap the Share button in Safari (⎙ / ⎋) and select "Add to Home Screen".')}
-                            </div>
-                          </div>
-                        ) : !canInstall ? (
-                          <div className="p-3.5 rounded-2xl bg-[#F7FAF4] dark:bg-[#1C2919] border border-[#DCEAD4] dark:border-[#2A3E26] text-xs text-[#3B4E37] dark:text-[#A6BC9F] flex items-start gap-2.5">
-                            <span className="text-base shrink-0">💡</span>
-                            <div className="text-[11px] leading-relaxed">
-                              <span className="font-bold text-[#151E14] dark:text-[#E8F2E4] block mb-0.5">
-                                {isDraftFa ? 'نصب دستی از طریق مرورگر:' : 'Manual Browser Installation:'}
-                              </span>
-                              {t('settings.installManualGeneral', 'To install Lerni: Open your browser menu (⋮ or ⋯) and select "Install Lerni" or "Add to Home screen".')}
-                            </div>
-                          </div>
-                        ) : null}
-                      </div>
-                    )}
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </section>
-          
-          {/* Feature: AI Provider & API Key Configuration */}
-          <section id="section-settings-gemini" className="rounded-[28px] bg-white dark:bg-[#182316] border border-[#D8E8D0] dark:border-[#22301F] shadow-sm transition-all duration-200 overflow-hidden">
-            <button
-              type="button"
-              onClick={() => toggleSection('ai')}
-              aria-expanded={expandedSections['ai']}
-              className="w-full p-4 sm:p-5 flex items-center justify-between text-start gap-3 hover:bg-[#F9FAF6] dark:hover:bg-[#1C2819] transition-colors cursor-pointer group"
-            >
-              <div className="flex items-center gap-3 min-w-0">
-                <div className="w-9 h-9 rounded-xl bg-[#E8F8D8] dark:bg-[#1E3800] border border-[#80D141]/50 flex items-center justify-center text-[#234A00] dark:text-[#80D141] shrink-0 group-hover:scale-105 transition-transform">
-                  <Sparkles className="w-4 h-4" />
-                </div>
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <h3 className="font-display text-sm sm:text-base font-bold text-[#151E14] dark:text-[#E8F2E4]">
-                      {t('settings.geminiSection', 'AI Provider & API Key')}
-                    </h3>
-                    <span className="text-[11px] font-semibold text-[#3B7E10] dark:text-[#80D141] px-2 py-0.5 rounded-full bg-[#E8F8D8] dark:bg-[#1E3800] border border-[#80D141]/30">
-                      {selectedProvider === 'custom'
-                        ? (customModelInput ? `Custom · ${customModelInput}` : 'Custom (OpenAI)')
-                        : selectedProvider === 'openrouter'
-                        ? `OpenRouter · ${openRouterModelInput ? openRouterModelInput.split('/')[1] || openRouterModelInput : 'Default'}`
-                        : `Gemini · ${geminiModelInput ? geminiModelInput.replace('gemini-', '') : 'Flash'}`}
-                    </span>
-                  </div>
-                  <p className="text-xs text-[#485B44] dark:text-[#9EB598] truncate">
-                    {t('settings.geminiDesc', 'Configure Google Gemini, OpenRouter, or Custom OpenAI API')}
-                  </p>
-                </div>
-              </div>
-
-              <div className="w-8 h-8 rounded-full flex items-center justify-center text-[#485B44] dark:text-[#9EB598] group-hover:text-[#151E14] dark:group-hover:text-[#E8F2E4] group-hover:bg-[#EDF6E8] dark:group-hover:bg-[#202E1E] transition-colors shrink-0">
-                <ChevronDown className={`w-4 h-4 transition-transform duration-200 ${expandedSections['ai'] ? 'rotate-180' : ''}`} />
-              </div>
+              <ArrowLeft className="w-4 h-4 rtl:rotate-180" />
+              <span>{t('settings.navAllSettings', 'All Settings')}</span>
             </button>
+            <span className="text-xs font-semibold text-[#485B44] dark:text-[#9EB598] truncate">
+              {currentCategoryMeta.label}
+            </span>
+          </div>
 
-            <AnimatePresence initial={false}>
-              {expandedSections['ai'] && (
-                <motion.div
-                  initial={{ height: 0, opacity: 0 }}
-                  animate={{ height: 'auto', opacity: 1 }}
-                  exit={{ height: 0, opacity: 0 }}
-                  transition={{ duration: 0.22, ease: 'easeInOut' }}
-                >
-                  <div className="px-5 pb-5 sm:px-6 sm:pb-6 pt-2 border-t border-[#DCEAD4]/80 dark:border-[#263722] space-y-4">
-                    {/* AI Provider Selector Tabs */}
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-              <button
-                id="btn-provider-gemini"
-                type="button"
-                onClick={() => handleProviderChange('gemini')}
-                className={`p-3 rounded-2xl flex items-center justify-between border transition-all text-start cursor-pointer ${
-                  selectedProvider === 'gemini'
-                    ? 'bg-[#80D141]/15 dark:bg-[#80D141]/20 border-[#80D141] shadow-xs ring-1 ring-[#80D141]'
-                    : 'bg-[#F7FAF4] dark:bg-[#1C2919] text-[#485B44] dark:text-[#9EB598] border-[#DCEAD4] dark:border-[#2A3E26] hover:bg-[#E2F5D1]'
-                }`}
-              >
-                <div>
-                  <div className="text-xs font-bold text-[#151E14] dark:text-[#E8F2E4]">
-                    {t('settings.providerGemini', 'Google Gemini')}
-                  </div>
-                  <div className="text-[10px] text-[#485B44] dark:text-[#9EB598]">
-                    {isDraftFa ? 'مدل سریع Gemini Flash' : 'Direct Google AI Studio'}
-                  </div>
-                </div>
-                {selectedProvider === 'gemini' && (
-                  <div className="w-5 h-5 rounded-full bg-[#80D141] text-[#0F2600] flex items-center justify-center shrink-0">
-                    <Check className="w-3 h-3 stroke-[3]" />
-                  </div>
-                )}
-              </button>
-
-              <button
-                id="btn-provider-openrouter"
-                type="button"
-                onClick={() => handleProviderChange('openrouter')}
-                className={`p-3 rounded-2xl flex items-center justify-between border transition-all text-start cursor-pointer ${
-                  selectedProvider === 'openrouter'
-                    ? 'bg-[#80D141]/15 dark:bg-[#80D141]/20 border-[#80D141] shadow-xs ring-1 ring-[#80D141]'
-                    : 'bg-[#F7FAF4] dark:bg-[#1C2919] text-[#485B44] dark:text-[#9EB598] border-[#DCEAD4] dark:border-[#2A3E26] hover:bg-[#E2F5D1]'
-                }`}
-              >
-                <div>
-                  <div className="text-xs font-bold text-[#151E14] dark:text-[#E8F2E4]">
-                    {t('settings.providerOpenRouter', 'OpenRouter')}
-                  </div>
-                  <div className="text-[10px] text-[#485B44] dark:text-[#9EB598]">
-                    {isDraftFa ? 'دسترسی به تمام مدل‌های هوش مصنوعی' : 'Multi-model AI router'}
-                  </div>
-                </div>
-                {selectedProvider === 'openrouter' && (
-                  <div className="w-5 h-5 rounded-full bg-[#80D141] text-[#0F2600] flex items-center justify-center shrink-0">
-                    <Check className="w-3 h-3 stroke-[3]" />
-                  </div>
-                )}
-              </button>
-
-              <button
-                id="btn-provider-custom"
-                type="button"
-                onClick={() => handleProviderChange('custom')}
-                className={`p-3 rounded-2xl flex items-center justify-between border transition-all text-start cursor-pointer ${
-                  selectedProvider === 'custom'
-                    ? 'bg-[#80D141]/15 dark:bg-[#80D141]/20 border-[#80D141] shadow-xs ring-1 ring-[#80D141]'
-                    : 'bg-[#F7FAF4] dark:bg-[#1C2919] text-[#485B44] dark:text-[#9EB598] border-[#DCEAD4] dark:border-[#2A3E26] hover:bg-[#E2F5D1]'
-                }`}
-              >
-                <div>
-                  <div className="text-xs font-bold text-[#151E14] dark:text-[#E8F2E4]">
-                    {t('settings.providerCustom', 'Custom (OpenAI)')}
-                  </div>
-                  <div className="text-[10px] text-[#485B44] dark:text-[#9EB598]">
-                    {isDraftFa ? 'اتصال به Ollama، Groq و...' : 'Ollama, Groq, DeepSeek, etc.'}
-                  </div>
-                </div>
-                {selectedProvider === 'custom' && (
-                  <div className="w-5 h-5 rounded-full bg-[#80D141] text-[#0F2600] flex items-center justify-center shrink-0">
-                    <Check className="w-3 h-3 stroke-[3]" />
-                  </div>
-                )}
-              </button>
+          <div className="rounded-[24px] sm:rounded-[28px] bg-white dark:bg-[#182316] border border-[#D8E8D0] dark:border-[#22301F] shadow-sm p-5 sm:p-7 space-y-7">
+            {/* Active Category Title Header */}
+            <div className="flex items-start gap-3 pb-4 border-b border-[#DCEAD4]/80 dark:border-[#263722]">
+              <div className="w-10 h-10 rounded-xl bg-[#E8F8D8] dark:bg-[#1E3800] border border-[#80D141]/50 flex items-center justify-center text-[#234A00] dark:text-[#80D141] shrink-0">
+                {currentCategoryMeta.icon}
+              </div>
+              <div className="min-w-0">
+                <h3 className="font-display text-base sm:text-lg font-bold text-[#151E14] dark:text-[#E8F2E4]">
+                  {currentCategoryMeta.label}
+                </h3>
+                <p className="text-xs text-[#485B44] dark:text-[#9EB598] mt-0.5">
+                  {currentCategoryMeta.desc}
+                </p>
+              </div>
             </div>
 
-            {/* Active Provider Key & Model Configuration */}
-            <div className="p-4 rounded-2xl bg-[#F7FAF4] dark:bg-[#1C2919] border border-[#DCEAD4] dark:border-[#2A3E26] space-y-3">
-              {selectedProvider === 'gemini' ? (
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <label className="text-xs font-bold text-[#151E14] dark:text-[#E8F2E4] flex items-center gap-1.5">
-                      <Key className="w-3.5 h-3.5 text-[#80D141]" />
-                      <span>{t('settings.customApiKey', 'Personal Gemini API Key')}</span>
-                    </label>
-
-                    {(draftPrefs.geminiApiKey || apiKeyInput) && (
-                      <button
-                        type="button"
-                        onClick={handleClearKey}
-                        className="text-[11px] text-[#B3261E] dark:text-[#F2B8B5] hover:underline font-medium cursor-pointer"
-                      >
-                        {isDraftFa ? 'پاک کردن کلید' : 'Clear key'}
-                      </button>
-                    )}
-                  </div>
-
-                  <form onSubmit={handleSaveCustomKey} className="space-y-3">
-                    <div className="relative flex items-center">
-                      <input
-                        type={showKey ? 'text' : 'password'}
-                        value={apiKeyInput}
-                        onChange={(e) => setApiKeyInput(e.target.value)}
-                        placeholder={isDraftFa ? 'کلید اختصاصی خود (AIzaSy...) را وارد کنید' : 'Paste your API key (AIzaSy...)'}
-                        className="w-full pl-3.5 pr-20 py-2.5 rounded-xl bg-white dark:bg-[#22301F] border border-[#DCEAD4] dark:border-[#2E402B] text-xs font-mono text-[#151E14] dark:text-[#E8F2E4] placeholder:font-sans placeholder:text-[#79747E] dark:placeholder:text-[#8D9E8A] focus:outline-none focus:ring-2 focus:ring-[#80D141]"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowKey(!showKey)}
-                        className="absolute right-2.5 p-1 rounded-lg text-[#79747E] hover:text-[#151E14] dark:hover:text-[#E8F2E4] transition-colors cursor-pointer"
-                        title={showKey ? 'Hide key' : 'Show key'}
-                      >
-                        {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                      </button>
-                    </div>
-
-                    {/* Gemini Model Field with Presets */}
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between">
-                        <label className="text-[11px] font-bold text-[#151E14] dark:text-[#E8F2E4] block">
-                          {t('settings.geminiModel', 'Gemini Model')}
-                        </label>
-                        <span className="text-[10px] text-[#556D50] dark:text-[#8EA887]">
-                          {t('settings.presetModels', 'Preset Models')}
-                        </span>
-                      </div>
-
-                      {/* Gemini Preset Model Chips */}
-                      <div className="flex flex-wrap gap-1.5">
-                        {GEMINI_MODEL_PRESETS.map((preset) => {
-                          const isSelected = geminiModelInput === preset.id;
-                          return (
-                            <button
-                              key={preset.id}
-                              type="button"
-                              onClick={() => {
-                                soundEngine.playPop();
-                                setGeminiModelInput(preset.id);
-                              }}
-                              className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer border ${
-                                isSelected
-                                  ? 'bg-[#E8F8D8] dark:bg-[#1E3800] border-[#80D141] text-[#1C3700] dark:text-[#80D141] font-bold shadow-2xs scale-[1.02]'
-                                  : 'bg-white dark:bg-[#202E1E] hover:bg-[#EDF6E8] dark:hover:bg-[#283A24] border-[#DCEAD4] dark:border-[#2E4229] text-[#3B4E37] dark:text-[#C5DDC0]'
-                              }`}
-                              title={preset.id}
-                            >
-                              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${isSelected ? 'bg-[#80D141]' : 'bg-transparent'}`} />
-                              <span>{preset.name}</span>
-                            </button>
-                          );
-                        })}
-                      </div>
-
-                      <input
-                        type="text"
-                        value={geminiModelInput}
-                        onChange={(e) => setGeminiModelInput(e.target.value)}
-                        placeholder="gemini-flash-lite-latest"
-                        className="w-full px-3.5 py-2 rounded-xl bg-white dark:bg-[#22301F] border border-[#DCEAD4] dark:border-[#2E402B] text-xs font-mono text-[#151E14] dark:text-[#E8F2E4] focus:outline-none focus:ring-2 focus:ring-[#80D141]"
-                      />
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="submit"
-                        disabled={
-                          !apiKeyInput.trim() ||
-                          (apiKeyInput === (draftPrefs.geminiApiKey || '') &&
-                            geminiModelInput === (draftPrefs.geminiModel || DEFAULT_GEMINI_MODEL))
-                        }
-                        className="px-4 py-2 rounded-xl bg-[#80D141] hover:bg-[#72BF36] disabled:opacity-40 text-[#0F2600] text-xs font-bold shadow-xs transition-all cursor-pointer"
-                      >
-                        {t('settings.saveKey', 'Save API Key')}
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={handleTestConnection}
-                        disabled={testingKey || (!apiKeyInput.trim() && !draftPrefs.geminiApiKey)}
-                        className="px-3.5 py-2 rounded-xl bg-white dark:bg-[#263722] hover:bg-[#E2F2D9] dark:hover:bg-[#2E4229] disabled:opacity-40 text-[#3B4E37] dark:text-[#B6CCB0] text-xs font-bold border border-[#DCEAD4] dark:border-[#33482E] transition-all flex items-center gap-1.5 cursor-pointer"
-                      >
-                        {testingKey ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ShieldCheck className="w-3.5 h-3.5" />}
-                        <span>{t('settings.testKey', 'Test Connection')}</span>
-                      </button>
-                    </div>
-                  </form>
-
-                  {/* Helper Link */}
-                  <div className="flex items-center justify-between text-[11px] pt-0.5">
-                    <span className="text-[#485B44] dark:text-[#9EB598]">
-                      {isDraftFa ? 'ذخیره‌شده محلی در مرورگر' : 'Stored locally in your browser'}
-                    </span>
-                    <a
-                      href="https://aistudio.google.com/app/apikey"
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-[#3B7E10] dark:text-[#80D141] hover:underline font-bold flex items-center gap-1"
-                    >
-                      <span>{isDraftFa ? 'دریافت کلید رایگان Google AI Studio' : 'Get free key from Google AI Studio'}</span>
-                      <ExternalLink className="w-3 h-3" />
-                    </a>
-                  </div>
-                </div>
-              ) : selectedProvider === 'openrouter' ? (
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <label className="text-xs font-bold text-[#151E14] dark:text-[#E8F2E4] flex items-center gap-1.5">
-                      <Key className="w-3.5 h-3.5 text-[#80D141]" />
-                      <span>{t('settings.openRouterApiKey', 'OpenRouter API Key')}</span>
-                    </label>
-
-                    {(draftPrefs.openRouterApiKey || openRouterKeyInput) && (
-                      <button
-                        type="button"
-                        onClick={handleClearKey}
-                        className="text-[11px] text-[#B3261E] dark:text-[#F2B8B5] hover:underline font-medium cursor-pointer"
-                      >
-                        {isDraftFa ? 'پاک کردن کلید' : 'Clear key'}
-                      </button>
-                    )}
-                  </div>
-
-                  <form onSubmit={handleSaveCustomKey} className="space-y-3">
-                    <div className="relative flex items-center">
-                      <input
-                        type={showKey ? 'text' : 'password'}
-                        value={openRouterKeyInput}
-                        onChange={(e) => setOpenRouterKeyInput(e.target.value)}
-                        placeholder={isDraftFa ? 'کلید OpenRouter خود (sk-or-v1-...) را وارد کنید' : 'Paste your OpenRouter key (sk-or-v1-...)'}
-                        className="w-full pl-3.5 pr-20 py-2.5 rounded-xl bg-white dark:bg-[#22301F] border border-[#DCEAD4] dark:border-[#2E402B] text-xs font-mono text-[#151E14] dark:text-[#E8F2E4] placeholder:font-sans placeholder:text-[#79747E] dark:placeholder:text-[#8D9E8A] focus:outline-none focus:ring-2 focus:ring-[#80D141]"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowKey(!showKey)}
-                        className="absolute right-2.5 p-1 rounded-lg text-[#79747E] hover:text-[#151E14] dark:hover:text-[#E8F2E4] transition-colors cursor-pointer"
-                        title={showKey ? 'Hide key' : 'Show key'}
-                      >
-                        {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                      </button>
-                    </div>
-
-                    {/* OpenRouter Model Field with Presets */}
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between flex-wrap gap-1.5">
-                        <label className="text-[11px] font-bold text-[#151E14] dark:text-[#E8F2E4] block">
-                          {t('settings.openRouterModel', 'OpenRouter Model')}
-                        </label>
-                        <a
-                          href="https://openrouter.ai/models?variant=free&output_modalities=text"
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-[11px] text-[#3B7E10] dark:text-[#80D141] hover:underline font-bold inline-flex items-center gap-1"
-                        >
-                          <span>{t('settings.openRouterFreeModelsLink', 'Browse Free Text Models')}</span>
-                          <ExternalLink className="w-3 h-3" />
-                        </a>
-                      </div>
-
-                      {/* OpenRouter Preset Model Chips */}
-                      <div className="flex flex-wrap gap-1.5">
-                        {OPENROUTER_MODEL_PRESETS.map((preset) => {
-                          const isSelected = openRouterModelInput === preset.id;
-                          return (
-                            <button
-                              key={preset.id}
-                              type="button"
-                              onClick={() => {
-                                soundEngine.playPop();
-                                setOpenRouterModelInput(preset.id);
-                              }}
-                              className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer border ${
-                                isSelected
-                                  ? 'bg-[#E8F8D8] dark:bg-[#1E3800] border-[#80D141] text-[#1C3700] dark:text-[#80D141] font-bold shadow-2xs scale-[1.02]'
-                                  : 'bg-white dark:bg-[#202E1E] hover:bg-[#EDF6E8] dark:hover:bg-[#283A24] border-[#DCEAD4] dark:border-[#2E4229] text-[#3B4E37] dark:text-[#C5DDC0]'
-                              }`}
-                              title={preset.id}
-                            >
-                              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${isSelected ? 'bg-[#80D141]' : 'bg-transparent'}`} />
-                              <span>{preset.name}</span>
-                            </button>
-                          );
-                        })}
-                      </div>
-
-                      <input
-                        type="text"
-                        value={openRouterModelInput}
-                        onChange={(e) => setOpenRouterModelInput(e.target.value)}
-                        placeholder="liquid/lfm-2.5-2.6b:free"
-                        className="w-full px-3.5 py-2 rounded-xl bg-white dark:bg-[#22301F] border border-[#DCEAD4] dark:border-[#2E402B] text-xs font-mono text-[#151E14] dark:text-[#E8F2E4] focus:outline-none focus:ring-2 focus:ring-[#80D141]"
-                      />
-                      <p className="text-[10.5px] text-[#485B44] dark:text-[#9EB598]">
-                        {t('settings.openRouterFreeModelsHint', 'OpenRouter offers free models ending with :free (e.g., google/gemini-2.5-flash:free)')}
-                      </p>
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="submit"
-                        disabled={
-                          !openRouterKeyInput.trim() ||
-                          (openRouterKeyInput === (draftPrefs.openRouterApiKey || '') &&
-                            openRouterModelInput === (draftPrefs.openRouterModel || DEFAULT_OPENROUTER_MODEL))
-                        }
-                        className="px-4 py-2 rounded-xl bg-[#80D141] hover:bg-[#72BF36] disabled:opacity-40 text-[#0F2600] text-xs font-bold shadow-xs transition-all cursor-pointer"
-                      >
-                        {t('settings.saveKey', 'Save API Key')}
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={handleTestConnection}
-                        disabled={testingKey || (!openRouterKeyInput.trim() && !draftPrefs.openRouterApiKey)}
-                        className="px-3.5 py-2 rounded-xl bg-white dark:bg-[#263722] hover:bg-[#E2F2D9] dark:hover:bg-[#2E4229] disabled:opacity-40 text-[#3B4E37] dark:text-[#B6CCB0] text-xs font-bold border border-[#DCEAD4] dark:border-[#33482E] transition-all flex items-center gap-1.5 cursor-pointer"
-                      >
-                        {testingKey ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ShieldCheck className="w-3.5 h-3.5" />}
-                        <span>{t('settings.testKey', 'Test Connection')}</span>
-                      </button>
-                    </div>
-                  </form>
-
-                  {/* Helper Link */}
-                  <div className="flex items-center justify-between text-[11px] pt-0.5">
-                    <span className="text-[#485B44] dark:text-[#9EB598]">
-                      {isDraftFa ? 'ذخیره‌شده محلی در مرورگر' : 'Stored locally in your browser'}
-                    </span>
-                    <a
-                      href="https://openrouter.ai/keys"
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-[#3B7E10] dark:text-[#80D141] hover:underline font-bold flex items-center gap-1"
-                    >
-                      <span>{isDraftFa ? 'دریافت کلید از OpenRouter.ai' : 'Get API key from OpenRouter.ai'}</span>
-                      <ExternalLink className="w-3 h-3" />
-                    </a>
-                  </div>
-                </div>
-              ) : (
-                <div className="space-y-3.5">
-                  <div className="flex items-center justify-between">
-                    <label className="text-xs font-bold text-[#151E14] dark:text-[#E8F2E4] flex items-center gap-1.5">
-                      <Cpu className="w-3.5 h-3.5 text-[#80D141]" />
-                      <span>{t('settings.providerCustom', 'Custom OpenAI-Compatible API')}</span>
-                    </label>
-
-                    {(draftPrefs.customOpenAiApiKey || customKeyInput || customBaseUrlInput || customModelInput || customApiVersionInput) && (
-                      <button
-                        type="button"
-                        onClick={handleClearKey}
-                        className="text-[11px] text-[#B3261E] dark:text-[#F2B8B5] hover:underline font-medium cursor-pointer"
-                      >
-                        {isDraftFa ? 'پاک کردن تنظیمات' : 'Clear configuration'}
-                      </button>
-                    )}
-                  </div>
-
-                  <form onSubmit={handleSaveCustomKey} className="space-y-3">
-                    {/* Endpoint / Base URL */}
-                    <div className="space-y-1">
-                      <div className="flex items-center justify-between flex-wrap gap-1">
-                        <label className="text-[11px] font-bold text-[#151E14] dark:text-[#E8F2E4] flex items-center gap-1.5">
-                          <Server className="w-3.5 h-3.5 text-[#80D141]" />
-                          <span>{t('settings.customEndpointLabel', 'API Base URL / Endpoint')}</span>
-                        </label>
-                        {customBaseUrlInput && isLocalEndpoint(customBaseUrlInput) ? (
-                          <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-[#E8F8D8] dark:bg-[#1E3800] text-[#1C3700] dark:text-[#80D141] border border-[#80D141]/40 flex items-center gap-1">
-                            <span className="w-1.5 h-1.5 rounded-full bg-[#80D141] animate-pulse" />
-                            {isDraftFa ? 'سرویس محلی (بدون نیاز به کلید)' : 'Local server (no key needed)'}
-                          </span>
-                        ) : customBaseUrlInput ? (
-                          <span className="text-[10px] text-[#556D50] dark:text-[#8EA887]">
-                            {isDraftFa ? 'پایانه ابری (نیاز به کلید Bearer)' : 'Cloud endpoint (Bearer key required)'}
-                          </span>
-                        ) : null}
-                      </div>
-
-                      <input
-                        type="text"
-                        value={customBaseUrlInput}
-                        onChange={(e) => setCustomBaseUrlInput(e.target.value)}
-                        placeholder="https://api.openai.com/v1"
-                        className="w-full px-3.5 py-2.5 rounded-xl bg-white dark:bg-[#22301F] border border-[#DCEAD4] dark:border-[#2E402B] text-xs font-mono text-[#151E14] dark:text-[#E8F2E4] placeholder:font-sans placeholder:text-[#79747E] dark:placeholder:text-[#8D9E8A] focus:outline-none focus:ring-2 focus:ring-[#80D141]"
-                      />
-                      <p className="text-[10.5px] text-[#485B44] dark:text-[#9EB598]">
-                        {t('settings.customEndpointHint', 'Works with any OpenAI-compatible /chat/completions endpoint (local or cloud).')}
-                      </p>
-                    </div>
-
-                    {/* API Key */}
-                    <div className="space-y-1">
-                      <div className="flex items-center justify-between">
-                        <label className="text-[11px] font-bold text-[#151E14] dark:text-[#E8F2E4] flex items-center gap-1.5">
-                          <Key className="w-3.5 h-3.5 text-[#80D141]" />
-                          <span>{t('settings.customApiKeyLabel', 'API Key (Optional for Local)')}</span>
-                        </label>
-                        {customBaseUrlInput && isLocalEndpoint(customBaseUrlInput) && (
-                          <span className="text-[10px] text-[#556D50] dark:text-[#8EA887]">
-                            {isDraftFa ? 'اختیاری برای سرورهای محلی' : 'Optional for local servers'}
-                          </span>
-                        )}
-                      </div>
-
-                      <div className="relative flex items-center">
-                        <input
-                          type={showKey ? 'text' : 'password'}
-                          value={customKeyInput}
-                          onChange={(e) => setCustomKeyInput(e.target.value)}
-                          placeholder={
-                            customBaseUrlInput && isLocalEndpoint(customBaseUrlInput)
-                              ? (isDraftFa ? 'اختیاری برای سرورهای محلی' : 'Optional for local servers')
-                              : (isDraftFa ? 'کلید API را وارد کنید (Bearer token)' : 'Paste API Key (Bearer token)')
-                          }
-                          className="w-full pl-3.5 pr-20 py-2.5 rounded-xl bg-white dark:bg-[#22301F] border border-[#DCEAD4] dark:border-[#2E402B] text-xs font-mono text-[#151E14] dark:text-[#E8F2E4] placeholder:font-sans placeholder:text-[#79747E] dark:placeholder:text-[#8D9E8A] focus:outline-none focus:ring-2 focus:ring-[#80D141]"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => setShowKey(!showKey)}
-                          className="absolute right-2.5 p-1 rounded-lg text-[#79747E] hover:text-[#151E14] dark:hover:text-[#E8F2E4] transition-colors cursor-pointer"
-                          title={showKey ? 'Hide key' : 'Show key'}
-                        >
-                          {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Model Name */}
-                    <div className="space-y-1">
-                      <label className="text-[11px] font-bold text-[#151E14] dark:text-[#E8F2E4] flex items-center gap-1.5">
-                        <Zap className="w-3.5 h-3.5 text-[#80D141]" />
-                        <span>{t('settings.customModelLabel', 'Model Name / ID')}</span>
-                      </label>
-
-                      <input
-                        type="text"
-                        value={customModelInput}
-                        onChange={(e) => setCustomModelInput(e.target.value)}
-                        placeholder="e.g. gpt-4o, llama3.3, deepseek-chat, mistral-large"
-                        className="w-full px-3.5 py-2.5 rounded-xl bg-white dark:bg-[#22301F] border border-[#DCEAD4] dark:border-[#2E402B] text-xs font-mono text-[#151E14] dark:text-[#E8F2E4] placeholder:font-sans placeholder:text-[#79747E] dark:placeholder:text-[#8D9E8A] focus:outline-none focus:ring-2 focus:ring-[#80D141]"
-                      />
-                    </div>
-
-                    {/* API Version (Optional, for Azure or Gateways) */}
-                    <div className="space-y-1">
-                      <div className="flex items-center justify-between">
-                        <label className="text-[11px] font-bold text-[#151E14] dark:text-[#E8F2E4] flex items-center gap-1.5">
-                          <Sliders className="w-3.5 h-3.5 text-[#80D141]" />
-                          <span>{t('settings.customApiVersionLabel', 'API Version (Optional)')}</span>
-                        </label>
-                        <span className="text-[10px] text-[#556D50] dark:text-[#8EA887]">
-                          {isDraftFa ? 'مثلاً برای Azure' : 'e.g. for Azure'}
-                        </span>
-                      </div>
-                      <input
-                        type="text"
-                        value={customApiVersionInput}
-                        onChange={(e) => setCustomApiVersionInput(e.target.value)}
-                        placeholder="e.g. 2024-02-15-preview"
-                        className="w-full px-3.5 py-2.5 rounded-xl bg-white dark:bg-[#22301F] border border-[#DCEAD4] dark:border-[#2E402B] text-xs font-mono text-[#151E14] dark:text-[#E8F2E4] placeholder:font-sans placeholder:text-[#79747E] dark:placeholder:text-[#8D9E8A] focus:outline-none focus:ring-2 focus:ring-[#80D141]"
-                      />
-                      <p className="text-[10px] text-[#485B44] dark:text-[#9EB598]">
-                        {isDraftFa
-                          ? 'سرورهای معمولی OpenAI نیازی به نسخه ندارند. در صورت استفاده از Azure، نسخه API را اینجا بنویسید.'
-                          : 'Standard OpenAI & local servers leave this blank. For Azure OpenAI, enter your api-version query string.'}
-                      </p>
-                    </div>
-
-                    <div className="flex items-center gap-2 pt-1">
-                      <button
-                        type="submit"
-                        className="px-4 py-2 rounded-xl bg-[#80D141] hover:bg-[#72BF36] text-[#0F2600] text-xs font-bold shadow-xs transition-all cursor-pointer"
-                      >
-                        {t('settings.saveKey', 'Save Configuration')}
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={handleTestConnection}
-                        disabled={testingKey}
-                        className="px-3.5 py-2 rounded-xl bg-white dark:bg-[#263722] hover:bg-[#E2F2D9] dark:hover:bg-[#2E4229] disabled:opacity-40 text-[#3B4E37] dark:text-[#B6CCB0] text-xs font-bold border border-[#DCEAD4] dark:border-[#33482E] transition-all flex items-center gap-1.5 cursor-pointer"
-                      >
-                        {testingKey ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ShieldCheck className="w-3.5 h-3.5" />}
-                        <span>{t('settings.testKey', 'Test Connection')}</span>
-                      </button>
-                    </div>
-                  </form>
-                </div>
-              )}
-            </div>
-
-            {/* Notification & Test Result Feedback Banners */}
-            <AnimatePresence>
-              {keySavedMessage && (
-                <motion.div
-                  initial={{ opacity: 0, y: -6 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -6 }}
-                  className="p-2.5 rounded-xl bg-[#E8F8D8] dark:bg-[#1E3800] border border-[#80D141]/50 text-xs font-bold text-[#1C3700] dark:text-[#80D141] flex items-center gap-2"
-                >
-                  <CheckCircle2 className="w-4 h-4 shrink-0" />
-                  <span>{keySavedMessage}</span>
-                </motion.div>
-              )}
-
-              {testResult && (
-                <motion.div
-                  initial={{ opacity: 0, y: -6 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -6 }}
-                  className={`p-3 rounded-xl border text-xs font-medium flex items-start gap-2 ${
-                    testResult.success
-                      ? 'bg-[#E8F8D8] dark:bg-[#1E3800] border-[#80D141]/50 text-[#1C3700] dark:text-[#80D141]'
-                      : 'bg-red-50 dark:bg-red-950/60 border-red-200 dark:border-red-900/60 text-red-800 dark:text-red-300'
-                  }`}
-                >
-                  {testResult.success ? (
-                    <ShieldCheck className="w-4 h-4 shrink-0 text-[#80D141] mt-0.5" />
-                  ) : (
-                    <AlertCircle className="w-4 h-4 shrink-0 text-red-600 dark:text-red-400 mt-0.5" />
-                  )}
-                  <div className="flex-1">
-                    <span className="font-bold">{testResult.success ? (isDraftFa ? 'اتصال موفق: ' : 'Connection Verified: ') : (isDraftFa ? 'خطا در اتصال: ' : 'Connection Issue: ')}</span>
-                    <span>{testResult.message}</span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setTestResult(null)}
-                    className="p-0.5 rounded-full hover:bg-black/10 transition-colors"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                </motion.div>
-              )}
-            </AnimatePresence>
-
-            {/* Interactive API Key Tester & Single-Turn Query Playground */}
-            <div id="section-api-test-playground" className="p-4 sm:p-5 rounded-2xl bg-[#F7FAF4] dark:bg-[#1C2919] border border-[#DCEAD4] dark:border-[#2A3E26] space-y-3.5">
-              <div className="flex items-start justify-between gap-2">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 rounded-xl bg-[#E8F8D8] dark:bg-[#20361C] border border-[#80D141]/50 flex items-center justify-center text-[#234A00] dark:text-[#80D141] shrink-0">
-                    <Terminal className="w-4 h-4 stroke-[2.5]" />
-                  </div>
+            {/* ==============================================================
+                CATEGORY 1: GENERAL & APPEARANCE
+               ============================================================== */}
+            {activeCategory === 'general' && (
+              <div className="space-y-7">
+                {/* Language & Direction */}
+                <div id="section-settings-language" className="space-y-3">
                   <div>
-                    <h4 className="text-xs sm:text-sm font-bold text-[#151E14] dark:text-[#E8F2E4] flex items-center gap-2 flex-wrap">
-                      <span>{t('settings.testPlaygroundTitle', 'API Key Tester & Query Playground')}</span>
-                      <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-[#E8F8D8] dark:bg-[#23351F] text-[#2C5214] dark:text-[#9DD86A] border border-[#80D141]/40">
-                        {selectedProvider === 'custom'
-                          ? `Custom · ${customModelInput || (isDraftFa ? 'مدل سفارشی' : 'custom model')}`
-                          : selectedProvider === 'openrouter'
-                          ? `OpenRouter · ${openRouterModelInput || DEFAULT_OPENROUTER_MODEL}`
-                          : `Gemini · ${geminiModelInput || DEFAULT_GEMINI_MODEL}`}
-                      </span>
+                    <h4 className="text-sm font-bold text-[#151E14] dark:text-[#E8F2E4]">
+                      {t('settings.languageSection', 'Language & Direction')}
                     </h4>
-                    <p className="text-[11px] text-[#485B44] dark:text-[#9EB598] mt-0.5 flex items-center justify-between flex-wrap gap-2">
-                      <span>{t('settings.testPlaygroundDesc', 'Send a single-turn prompt to verify your API key and chosen model respond accurately in real time.')}</span>
-                      {selectedProvider === 'openrouter' ? (
-                        <a
-                          href="https://openrouter.ai/models?variant=free&output_modalities=text"
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-[#3B7E10] dark:text-[#80D141] hover:underline font-bold inline-flex items-center gap-1 text-[11px]"
-                        >
-                          <span>{t('settings.openRouterFreeModelsLink', 'Browse Free Text Models')}</span>
-                          <ExternalLink className="w-3 h-3" />
-                        </a>
-                      ) : selectedProvider === 'custom' ? (
-                        <span className="text-[10.5px] font-mono text-[#3B7E10] dark:text-[#80D141]">
-                          {customBaseUrlInput || (isDraftFa ? 'آدرس سفارشی' : 'custom endpoint')}
-                        </span>
-                      ) : null}
+                    <p className="text-xs text-[#485B44] dark:text-[#9EB598] mt-0.5">
+                      {t('settings.languageDesc', 'Select your preferred interface language')}
                     </p>
                   </div>
-                </div>
-              </div>
 
-              {/* Quick Sample Prompts */}
-              <div className="space-y-1.5">
-                <span className="text-[10px] uppercase font-bold tracking-wider text-[#485B44] dark:text-[#9EB598]">
-                  {t('settings.samplePrompts', 'Quick Examples')}
-                </span>
-                <div className="flex flex-wrap gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const q = t('settings.samplePrompt1', "What's your name and model version?");
-                      setTestPromptInput(q);
-                      handleSendTestPrompt(q);
-                    }}
-                    disabled={testingPrompt}
-                    className="px-2.5 py-1 rounded-xl text-[11px] font-medium bg-white dark:bg-[#243321] hover:bg-[#E8F8D8] dark:hover:bg-[#2C4028] text-[#3B4E37] dark:text-[#C5DDC0] border border-[#DCEAD4] dark:border-[#30442B] transition-colors cursor-pointer disabled:opacity-50"
-                  >
-                    🤖 {t('settings.samplePrompt1', "What's your name and model version?")}
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const q = t('settings.samplePrompt2', 'Give 1 micro-step to start when overwhelmed (under 15 words).');
-                      setTestPromptInput(q);
-                      handleSendTestPrompt(q);
-                    }}
-                    disabled={testingPrompt}
-                    className="px-2.5 py-1 rounded-xl text-[11px] font-medium bg-white dark:bg-[#243321] hover:bg-[#E8F8D8] dark:hover:bg-[#2C4028] text-[#3B4E37] dark:text-[#C5DDC0] border border-[#DCEAD4] dark:border-[#30442B] transition-colors cursor-pointer disabled:opacity-50"
-                  >
-                    🎯 {t('settings.samplePrompt2', 'Give 1 micro-step to start when overwhelmed (under 15 words).')}
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const q = t('settings.samplePrompt3', 'Give 1 practical tip to break task paralysis (under 15 words).');
-                      setTestPromptInput(q);
-                      handleSendTestPrompt(q);
-                    }}
-                    disabled={testingPrompt}
-                    className="px-2.5 py-1 rounded-xl text-[11px] font-medium bg-white dark:bg-[#243321] hover:bg-[#E8F8D8] dark:hover:bg-[#2C4028] text-[#3B4E37] dark:text-[#C5DDC0] border border-[#DCEAD4] dark:border-[#30442B] transition-colors cursor-pointer disabled:opacity-50"
-                  >
-                    🧠 {t('settings.samplePrompt3', 'Give 1 practical tip to break task paralysis (under 15 words).')}
-                  </button>
-                </div>
-              </div>
-
-              {/* Prompt Input & Send */}
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  handleSendTestPrompt();
-                }}
-                className="space-y-2"
-              >
-                <div className="flex flex-col sm:flex-row gap-2">
-                  <input
-                    type="text"
-                    value={testPromptInput}
-                    onChange={(e) => setTestPromptInput(e.target.value)}
-                    placeholder={t('settings.testPromptPlaceholder', 'Type a prompt to test your API key (e.g., What is your model name?)...')}
-                    className="w-full sm:flex-1 min-w-0 px-3.5 py-2.5 rounded-xl bg-white dark:bg-[#22301F] border border-[#DCEAD4] dark:border-[#2E402B] text-xs text-[#151E14] dark:text-[#E8F2E4] placeholder:text-[#79747E] dark:placeholder:text-[#8D9E8A] focus:outline-none focus:ring-2 focus:ring-[#80D141]"
-                  />
-
-                  <button
-                    type="submit"
-                    disabled={testingPrompt || !testPromptInput.trim()}
-                    className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-[#80D141] hover:bg-[#72BF36] disabled:opacity-40 text-[#0F2600] text-xs font-bold shadow-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer shrink-0"
-                  >
-                    {testingPrompt ? (
-                      <>
-                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        <span>{t('settings.testingPrompt', 'Sending Query...')}</span>
-                      </>
-                    ) : (
-                      <>
-                        <Send className="w-3.5 h-3.5 stroke-[2.5] rtl:rotate-180" />
-                        <span>{t('settings.sendTestPrompt', 'Send Test Query')}</span>
-                      </>
-                    )}
-                  </button>
-                </div>
-              </form>
-
-              {/* Model Response Container */}
-              <div className="space-y-1.5 pt-1">
-                <div className="flex items-center justify-between text-xs font-bold text-[#151E14] dark:text-[#E8F2E4] flex-wrap gap-1.5">
-                  <span className="flex items-center gap-1.5">
-                    <MessageSquare className="w-3.5 h-3.5 text-[#80D141]" />
-                    <span>{t('settings.testResponseLabel', 'Model Response')}</span>
-                  </span>
-
-                  {promptTestResult && (
-                    <div className="flex items-center gap-2 flex-wrap">
-                      {promptTestResult.latencyMs > 0 && (
-                        <span className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-[#EDF6E8] dark:bg-[#20311D] text-[#3B4E37] dark:text-[#A7C59E] border border-[#D8E8D0] dark:border-[#2B4026] flex items-center gap-1">
-                          <Zap className="w-3 h-3 text-amber-500" />
-                          <span>{promptTestResult.latencyMs}ms</span>
-                        </span>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <button
+                      id="btn-lang-en"
+                      type="button"
+                      onClick={() => handleLanguageChange('en')}
+                      className={`p-4 rounded-2xl flex items-center justify-between border transition-all text-start cursor-pointer min-h-[60px] ${
+                        selectedLanguage === 'en'
+                          ? 'bg-[#80D141]/15 dark:bg-[#80D141]/20 border-[#80D141] shadow-xs ring-1 ring-[#80D141]'
+                          : 'bg-[#F7FAF4] dark:bg-[#1C2919] text-[#485B44] dark:text-[#9EB598] border-[#DCEAD4] dark:border-[#2A3E26] hover:bg-[#E2F5D1] dark:hover:bg-[#243620]'
+                      }`}
+                    >
+                      <div>
+                        <div className="text-xs font-bold text-[#151E14] dark:text-[#E8F2E4]">English</div>
+                        <div className="text-[11px] text-[#485B44] dark:text-[#9EB598] mt-0.5">Left-to-Right (LTR)</div>
+                      </div>
+                      {selectedLanguage === 'en' && (
+                        <div className="w-6 h-6 rounded-full bg-[#80D141] text-[#0F2600] flex items-center justify-center shrink-0">
+                          <Check className="w-3.5 h-3.5 stroke-[3]" />
+                        </div>
                       )}
+                    </button>
 
-                      {promptTestResult.response && (
-                        <button
-                          type="button"
-                          onClick={handleCopyTestResponse}
-                          className="text-[11px] font-medium text-[#3B4E37] dark:text-[#B6CCB0] hover:text-[#151E14] dark:hover:text-[#E8F2E4] flex items-center gap-1 cursor-pointer"
-                        >
-                          {copiedResponse ? (
-                            <>
-                              <Check className="w-3.5 h-3.5 text-emerald-600" />
-                              <span className="text-emerald-600 dark:text-emerald-400 font-bold">{t('settings.copiedResponse', 'Copied!')}</span>
-                            </>
-                          ) : (
-                            <>
-                              <Copy className="w-3.5 h-3.5" />
-                              <span>{t('settings.copyResponse', 'Copy')}</span>
-                            </>
-                          )}
-                        </button>
+                    <button
+                      id="btn-lang-fa"
+                      type="button"
+                      onClick={() => handleLanguageChange('fa')}
+                      className={`p-4 rounded-2xl flex items-center justify-between border transition-all text-start cursor-pointer min-h-[60px] ${
+                        selectedLanguage === 'fa'
+                          ? 'bg-[#80D141]/15 dark:bg-[#80D141]/20 border-[#80D141] shadow-xs ring-1 ring-[#80D141]'
+                          : 'bg-[#F7FAF4] dark:bg-[#1C2919] text-[#485B44] dark:text-[#9EB598] border-[#DCEAD4] dark:border-[#2A3E26] hover:bg-[#E2F5D1] dark:hover:bg-[#243620]'
+                      }`}
+                    >
+                      <div>
+                        <div className="text-xs font-bold text-[#151E14] dark:text-[#E8F2E4]">فارسی (Persian)</div>
+                        <div className="text-[11px] text-[#485B44] dark:text-[#9EB598] mt-0.5">راست‌به‌چپ (RTL)</div>
+                      </div>
+                      {selectedLanguage === 'fa' && (
+                        <div className="w-6 h-6 rounded-full bg-[#80D141] text-[#0F2600] flex items-center justify-center shrink-0">
+                          <Check className="w-3.5 h-3.5 stroke-[3]" />
+                        </div>
                       )}
-
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setPromptTestResult(null);
-                          setTestPromptInput('');
-                        }}
-                        className="text-[11px] text-[#79747E] hover:text-[#B3261E] dark:hover:text-[#F2B8B5] transition-colors cursor-pointer"
-                      >
-                        {t('settings.clearResponse', 'Clear')}
-                      </button>
-                    </div>
-                  )}
+                    </button>
+                  </div>
                 </div>
 
-                {/* Output Box */}
-                <div
-                  id="api-test-output-box"
-                  className={`p-3.5 rounded-xl border text-xs leading-relaxed transition-all min-h-[72px] flex flex-col justify-center ${
-                    testingPrompt
-                      ? 'bg-white dark:bg-[#202E1D] border-[#80D141]/50 text-[#485B44] dark:text-[#9EB598] animate-pulse'
-                      : promptTestResult?.success
-                      ? 'bg-white dark:bg-[#1E2D1B] border-[#80D141]/50 text-[#151E14] dark:text-[#E8F2E4] shadow-2xs'
-                      : promptTestResult?.error
-                      ? 'bg-red-50/70 dark:bg-red-950/40 border-red-200 dark:border-red-900/50 text-red-900 dark:text-red-300'
-                      : 'bg-white/60 dark:bg-[#202E1D]/50 border-dashed border-[#DCEAD4] dark:border-[#2C3E27] text-[#79747E] dark:text-[#8D9E8A]'
-                  }`}
-                >
-                  {testingPrompt ? (
-                    <div className="flex items-center gap-2 text-xs font-medium text-[#3B4E37] dark:text-[#A7C59E]">
-                      <Loader2 className="w-4 h-4 animate-spin text-[#80D141]" />
-                      <span>
-                        {isDraftFa
-                          ? `در حال ارسال پرسش به ${selectedProvider === 'openrouter' ? 'OpenRouter' : 'Google Gemini'}...`
-                          : `Querying ${selectedProvider === 'openrouter' ? 'OpenRouter' : 'Google Gemini'} (${selectedProvider === 'openrouter' ? (openRouterModelInput || DEFAULT_OPENROUTER_MODEL) : (geminiModelInput || DEFAULT_GEMINI_MODEL)})...`}
-                      </span>
-                    </div>
-                  ) : promptTestResult?.success ? (
-                    <div className="space-y-1.5">
-                      <div className="flex items-center gap-1.5 text-[11px] font-bold text-emerald-700 dark:text-emerald-400">
-                        <CheckCircle2 className="w-3.5 h-3.5" />
-                        <span>{promptTestResult.model}</span>
-                        <span className="text-[#79747E] dark:text-[#8D9E8A] font-normal">({promptTestResult.timestamp})</span>
-                      </div>
-                      <div className="whitespace-pre-wrap font-sans text-xs text-[#151E14] dark:text-[#E8F2E4] selection:bg-[#80D141]/30">
-                        {promptTestResult.response}
-                      </div>
-                    </div>
-                  ) : promptTestResult?.error ? (
-                    <div className="space-y-1">
-                      <div className="flex items-center gap-1.5 text-[11px] font-bold text-red-700 dark:text-red-400">
-                        <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                        <span>{isDraftFa ? 'خطا در اجرای پرسش' : 'Query Failed'}</span>
-                      </div>
-                      <p className="text-xs text-red-800 dark:text-red-300">
-                        {promptTestResult.error}
+                {/* Visual Theme */}
+                <div id="section-settings-theme" className="pt-6 border-t border-[#DCEAD4]/75 dark:border-[#263722] space-y-3">
+                  <div>
+                    <h4 className="text-sm font-bold text-[#151E14] dark:text-[#E8F2E4]">
+                      {t('settings.themeSection', 'Visual Theme')}
+                    </h4>
+                    <p className="text-xs text-[#485B44] dark:text-[#9EB598] mt-0.5">
+                      {t('settings.themeDesc', 'Eye-safe Forest Dark or Gentle Light')}
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDraftPrefs((prev) => ({ ...prev, theme: 'dark' }));
+                        onUpdatePrefs({ theme: 'dark' });
+                        soundEngine.playPop();
+                      }}
+                      className={`min-h-[48px] py-3 px-4 rounded-2xl text-xs font-bold flex items-center justify-center gap-2 border transition-all cursor-pointer ${
+                        draftPrefs.theme === 'dark'
+                          ? 'bg-[#80D141] text-[#0F2600] border-[#80D141] shadow-xs'
+                          : 'bg-[#F7FAF4] dark:bg-[#1C2919] text-[#485B44] dark:text-[#9EB598] border-[#DCEAD4] dark:border-[#2A3E26] hover:bg-[#E2F5D1] dark:hover:bg-[#243620]'
+                      }`}
+                    >
+                      <Moon className="w-4 h-4" />
+                      <span>{t('settings.themeDark', 'Forest Dark')}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDraftPrefs((prev) => ({ ...prev, theme: 'light' }));
+                        onUpdatePrefs({ theme: 'light' });
+                        soundEngine.playPop();
+                      }}
+                      className={`min-h-[48px] py-3 px-4 rounded-2xl text-xs font-bold flex items-center justify-center gap-2 border transition-all cursor-pointer ${
+                        draftPrefs.theme === 'light'
+                          ? 'bg-[#80D141] text-[#0F2600] border-[#80D141] shadow-xs'
+                          : 'bg-[#F7FAF4] dark:bg-[#1C2919] text-[#485B44] dark:text-[#9EB598] border-[#DCEAD4] dark:border-[#2A3E26] hover:bg-[#E2F5D1] dark:hover:bg-[#243620]'
+                      }`}
+                    >
+                      <Sun className="w-4 h-4" />
+                      <span>{t('settings.themeLight', 'Gentle Light')}</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Install Application (PWA) */}
+                <div id="section-settings-install" className="pt-6 border-t border-[#DCEAD4]/75 dark:border-[#263722] space-y-3">
+                  <div className="flex items-start justify-between gap-3 flex-wrap">
+                    <div>
+                      <h4 className="text-sm font-bold text-[#151E14] dark:text-[#E8F2E4] flex items-center gap-2">
+                        <Smartphone className="w-4 h-4 text-[#3B7E10] dark:text-[#80D141]" />
+                        <span>{t('settings.installAppSection', 'Install Application')}</span>
+                      </h4>
+                      <p className="text-xs text-[#485B44] dark:text-[#9EB598] mt-0.5 leading-relaxed">
+                        {t(
+                          'settings.installAppDesc',
+                          'Install Lerni as a native app on your phone, tablet, or desktop for instant access and distraction-free offline use.'
+                        )}
                       </p>
                     </div>
+                  </div>
+
+                  {isInstalled ? (
+                    <div className="p-3.5 rounded-2xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-300 dark:border-emerald-800 text-xs font-medium text-emerald-900 dark:text-emerald-200 flex items-center gap-3">
+                      <CheckCircle2 className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                      <div>
+                        <div className="font-bold text-sm text-emerald-950 dark:text-emerald-100">
+                          {isDraftFa ? 'برنامه نصب شده و آماده استفاده است' : 'Application Installed & Running'}
+                        </div>
+                        <div className="text-[11px] opacity-80 mt-0.5">
+                          {t(
+                            'settings.appInstalledDesc',
+                            'Lerni is running as an installed standalone application on this device.'
+                          )}
+                        </div>
+                      </div>
+                    </div>
                   ) : (
-                    <div className="text-[11px] text-[#79747E] dark:text-[#8D9E8A] italic">
-                      {t('settings.noResponseYet', 'Type a prompt above or pick a quick example to test your API key response.')}
+                    <div className="space-y-3">
+                      <div className="p-4 rounded-2xl bg-[#F7FAF4] dark:bg-[#1C2919] border border-[#DCEAD4] dark:border-[#2A3E26] flex items-center justify-between gap-3 flex-wrap">
+                        <div className="min-w-0">
+                          <div className="text-xs font-bold text-[#151E14] dark:text-[#E8F2E4]">
+                            {isDraftFa ? 'افزودن به صفحه اصلی و برنامه‌ها' : 'Add to Home Screen & Apps'}
+                          </div>
+                          <div className="text-[11px] text-[#485B44] dark:text-[#9EB598] mt-0.5">
+                            {t(
+                              'settings.installReadyDesc',
+                              'Tap the button below to add Lerni to your home screen or desktop application launcher.'
+                            )}
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          id="btn-settings-install-app-main"
+                          onClick={promptInstall}
+                          disabled={isInstalling || (!canInstall && !isIos)}
+                          className="min-h-[40px] px-5 py-2.5 rounded-xl bg-[#80D141] hover:bg-[#72BF36] disabled:opacity-50 text-[#0F2600] text-xs font-bold shadow-xs flex items-center gap-2 transition-all cursor-pointer active:scale-95 shrink-0"
+                        >
+                          <Download className="w-4 h-4 stroke-[2.5]" />
+                          <span>
+                            {isInstalling ? t('settings.installing', 'Installing...') : t('settings.installBtn', 'Install App')}
+                          </span>
+                        </button>
+                      </div>
+
+                      {isIos ? (
+                        <p className="text-[11px] text-[#485B44] dark:text-[#9EB598] leading-relaxed">
+                          <span className="font-bold text-[#151E14] dark:text-[#E8F2E4]">
+                            {isDraftFa ? 'راهنمای نصب در آیفون و آی‌پد (iOS): ' : 'Installation on iOS (iPhone / iPad): '}
+                          </span>
+                          {t(
+                            'settings.installManualIos',
+                            'To install on iOS: Tap the Share button in Safari (⎙ / ⎋) and select "Add to Home Screen".'
+                          )}
+                        </p>
+                      ) : !canInstall ? (
+                        <p className="text-[11px] text-[#485B44] dark:text-[#9EB598] leading-relaxed">
+                          <span className="font-bold text-[#151E14] dark:text-[#E8F2E4]">
+                            {isDraftFa ? 'نصب دستی از طریق مرورگر: ' : 'Manual Browser Installation: '}
+                          </span>
+                          {t(
+                            'settings.installManualGeneral',
+                            'To install Lerni: Open your browser menu (⋮ or ⋯) and select "Install Lerni" or "Add to Home screen".'
+                          )}
+                        </p>
+                      ) : null}
                     </div>
                   )}
                 </div>
 
-                {/* Single-turn isolation hint */}
-                <div className="text-[10px] text-[#556950] dark:text-[#8DA589] flex items-center gap-1.5 pt-0.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-[#80D141] shrink-0" />
-                  <span>{t('settings.isolatedContextHint', 'All queries are completely independent single-turn calls (zero conversation context or history retained).')}</span>
-                </div>
-              </div>
-            </div>
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </section>
-
-          {/* Smart Planner Custom Instructions Section */}
-          <section id="section-settings-planner-instructions" className="rounded-[28px] bg-white dark:bg-[#182316] border border-[#D8E8D0] dark:border-[#22301F] shadow-sm transition-all duration-200 overflow-hidden">
-            <button
-              type="button"
-              onClick={() => toggleSection('planner')}
-              aria-expanded={expandedSections['planner']}
-              className="w-full p-4 sm:p-5 flex items-center justify-between text-start gap-3 hover:bg-[#F9FAF6] dark:hover:bg-[#1C2819] transition-colors cursor-pointer group"
-            >
-              <div className="flex items-center gap-3 min-w-0">
-                <div className="w-9 h-9 rounded-xl bg-[#E8F8D8] dark:bg-[#1E3800] border border-[#80D141]/50 flex items-center justify-center text-[#234A00] dark:text-[#80D141] shrink-0 group-hover:scale-105 transition-transform">
-                  <Sparkles className="w-4 h-4" />
-                </div>
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <h3 className="font-display text-sm sm:text-base font-bold text-[#151E14] dark:text-[#E8F2E4]">
-                      {t('settings.plannerInstructionsSection', 'Smart Planner Custom Instructions')}
-                    </h3>
-                    <span className="text-[11px] font-semibold text-[#3B7E10] dark:text-[#80D141] px-2 py-0.5 rounded-full bg-[#E8F8D8] dark:bg-[#1E3800] border border-[#80D141]/30">
-                      {plannerInstructionsInput.trim() ? (isDraftFa ? 'سفارشی فعال' : 'Custom Rules Active') : (isDraftFa ? 'پیش‌فرض' : 'Default Rules')}
-                    </span>
-                  </div>
-                  <p className="text-xs text-[#485B44] dark:text-[#9EB598] truncate">
-                    {t('settings.plannerInstructionsDesc', 'Persistent rules & preferences for how AI structures your daily schedules')}
-                  </p>
-                </div>
-              </div>
-
-              <div className="w-8 h-8 rounded-full flex items-center justify-center text-[#485B44] dark:text-[#9EB598] group-hover:text-[#151E14] dark:group-hover:text-[#E8F2E4] group-hover:bg-[#EDF6E8] dark:group-hover:bg-[#202E1E] transition-colors shrink-0">
-                <ChevronDown className={`w-4 h-4 transition-transform duration-200 ${expandedSections['planner'] ? 'rotate-180' : ''}`} />
-              </div>
-            </button>
-
-            <AnimatePresence initial={false}>
-              {expandedSections['planner'] && (
-                <motion.div
-                  initial={{ height: 0, opacity: 0 }}
-                  animate={{ height: 'auto', opacity: 1 }}
-                  exit={{ height: 0, opacity: 0 }}
-                  transition={{ duration: 0.22, ease: 'easeInOut' }}
+                {/* App Version Indicator */}
+                <div
+                  id="section-settings-version"
+                  className="pt-6 border-t border-[#DCEAD4]/75 dark:border-[#263722] flex items-center justify-between gap-4"
                 >
-                  <div className="px-5 pb-5 sm:px-6 sm:pb-6 pt-2 border-t border-[#DCEAD4]/80 dark:border-[#263722] space-y-4">
-                    <form onSubmit={handleSavePlannerInstructions} className="space-y-3 pt-1">
-                      <div className="space-y-1.5">
-                        <textarea
-                          value={plannerInstructionsInput}
-                          onChange={(e) => setPlannerInstructionsInput(e.target.value)}
-                          placeholder={t('settings.plannerInstructionsPlaceholder', 'e.g., Never schedule deep work after 4 PM; Always add 15min rest after meetings; Group errands together in the morning...')}
-                          rows={4}
-                          className="w-full p-3.5 rounded-2xl bg-[#F7FAF4] dark:bg-[#1C2919] border border-[#DCEAD4] dark:border-[#2A3E26] text-xs text-[#151E14] dark:text-[#E8F2E4] placeholder:text-[#79747E] dark:placeholder:text-[#7D917A] focus:outline-none focus:ring-2 focus:ring-[#80D141] resize-none transition-all leading-relaxed"
-                        />
-                      </div>
+                  <div>
+                    <h4 className="text-sm font-bold text-[#151E14] dark:text-[#E8F2E4]">
+                      {t('settings.versionSection', 'App Version')}
+                    </h4>
+                    <p className="text-xs text-[#485B44] dark:text-[#9EB598] mt-0.5">
+                      {t('settings.versionDesc', 'Current application release')}
+                    </p>
+                  </div>
+                  <span
+                    id="settings-app-version"
+                    dir="ltr"
+                    className="font-mono text-sm font-bold tabular-nums text-[#151E14] dark:text-[#E8F2E4] shrink-0"
+                  >
+                    1.0.0
+                  </span>
+                </div>
+              </div>
+            )}
 
-                      {/* Example suggestions chips */}
-                      <div className="flex flex-wrap gap-1.5 items-center">
-                        <span className="text-[10px] font-bold text-[#485B44] dark:text-[#9EB598]">
-                          {isDraftFa ? 'پیشنهادهای سریع:' : 'Quick ideas:'}
-                        </span>
+            {/* ==============================================================
+                CATEGORY 2: AI & SMART PLANNER
+               ============================================================== */}
+            {activeCategory === 'ai' && (
+              <div className="space-y-7">
+                {/* Provider & Key Config */}
+                <div id="section-settings-gemini" className="space-y-4">
+                  <div>
+                    <h4 className="text-sm font-bold text-[#151E14] dark:text-[#E8F2E4]">
+                      {t('settings.geminiSection', 'AI Provider & API Key')}
+                    </h4>
+                    <p className="text-xs text-[#485B44] dark:text-[#9EB598] mt-0.5">
+                      {t('settings.geminiDesc', 'Configure Google Gemini, OpenRouter, or Custom OpenAI API')}
+                    </p>
+                  </div>
+
+                  {/* AI Provider Selector Tabs */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                    <button
+                      id="btn-provider-gemini"
+                      type="button"
+                      onClick={() => handleProviderChange('gemini')}
+                      className={`p-3 rounded-2xl flex items-center justify-between border transition-all text-start cursor-pointer min-h-[56px] ${
+                        selectedProvider === 'gemini'
+                          ? 'bg-[#80D141]/15 dark:bg-[#80D141]/20 border-[#80D141] shadow-xs ring-1 ring-[#80D141]'
+                          : 'bg-[#F7FAF4] dark:bg-[#1C2919] text-[#485B44] dark:text-[#9EB598] border-[#DCEAD4] dark:border-[#2A3E26] hover:bg-[#E2F5D1] dark:hover:bg-[#243620]'
+                      }`}
+                    >
+                      <div className="min-w-0">
+                        <div className="text-xs font-bold text-[#151E14] dark:text-[#E8F2E4] truncate">
+                          {t('settings.providerGemini', 'Google Gemini')}
+                        </div>
+                        <div className="text-[11px] text-[#485B44] dark:text-[#9EB598] truncate">
+                          {isDraftFa ? 'مدل سریع Gemini Flash' : 'Direct Google AI Studio'}
+                        </div>
+                      </div>
+                      {selectedProvider === 'gemini' && (
+                        <div className="w-5 h-5 rounded-full bg-[#80D141] text-[#0F2600] flex items-center justify-center shrink-0">
+                          <Check className="w-3 h-3 stroke-[3]" />
+                        </div>
+                      )}
+                    </button>
+
+                    <button
+                      id="btn-provider-openrouter"
+                      type="button"
+                      onClick={() => handleProviderChange('openrouter')}
+                      className={`p-3 rounded-2xl flex items-center justify-between border transition-all text-start cursor-pointer min-h-[56px] ${
+                        selectedProvider === 'openrouter'
+                          ? 'bg-[#80D141]/15 dark:bg-[#80D141]/20 border-[#80D141] shadow-xs ring-1 ring-[#80D141]'
+                          : 'bg-[#F7FAF4] dark:bg-[#1C2919] text-[#485B44] dark:text-[#9EB598] border-[#DCEAD4] dark:border-[#2A3E26] hover:bg-[#E2F5D1] dark:hover:bg-[#243620]'
+                      }`}
+                    >
+                      <div className="min-w-0">
+                        <div className="text-xs font-bold text-[#151E14] dark:text-[#E8F2E4] truncate">
+                          {t('settings.providerOpenRouter', 'OpenRouter')}
+                        </div>
+                        <div className="text-[11px] text-[#485B44] dark:text-[#9EB598] truncate">
+                          {isDraftFa ? 'دسترسی به تمام مدل‌های هوش مصنوعی' : 'Multi-model AI router'}
+                        </div>
+                      </div>
+                      {selectedProvider === 'openrouter' && (
+                        <div className="w-5 h-5 rounded-full bg-[#80D141] text-[#0F2600] flex items-center justify-center shrink-0">
+                          <Check className="w-3 h-3 stroke-[3]" />
+                        </div>
+                      )}
+                    </button>
+
+                    <button
+                      id="btn-provider-custom"
+                      type="button"
+                      onClick={() => handleProviderChange('custom')}
+                      className={`p-3 rounded-2xl flex items-center justify-between border transition-all text-start cursor-pointer min-h-[56px] ${
+                        selectedProvider === 'custom'
+                          ? 'bg-[#80D141]/15 dark:bg-[#80D141]/20 border-[#80D141] shadow-xs ring-1 ring-[#80D141]'
+                          : 'bg-[#F7FAF4] dark:bg-[#1C2919] text-[#485B44] dark:text-[#9EB598] border-[#DCEAD4] dark:border-[#2A3E26] hover:bg-[#E2F5D1] dark:hover:bg-[#243620]'
+                      }`}
+                    >
+                      <div className="min-w-0">
+                        <div className="text-xs font-bold text-[#151E14] dark:text-[#E8F2E4] truncate">
+                          {t('settings.providerCustom', 'Custom (OpenAI)')}
+                        </div>
+                        <div className="text-[11px] text-[#485B44] dark:text-[#9EB598] truncate">
+                          {isDraftFa ? 'اتصال به Ollama، Groq و...' : 'Ollama, Groq, DeepSeek, etc.'}
+                        </div>
+                      </div>
+                      {selectedProvider === 'custom' && (
+                        <div className="w-5 h-5 rounded-full bg-[#80D141] text-[#0F2600] flex items-center justify-center shrink-0">
+                          <Check className="w-3 h-3 stroke-[3]" />
+                        </div>
+                      )}
+                    </button>
+                  </div>
+
+                  {/* Active Provider Key & Model Configuration */}
+                  <div className="p-4 rounded-2xl bg-[#F7FAF4] dark:bg-[#1C2919] border border-[#DCEAD4] dark:border-[#2A3E26] space-y-3">
+                    {selectedProvider === 'gemini' ? (
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <label className="text-xs font-bold text-[#151E14] dark:text-[#E8F2E4] flex items-center gap-1.5">
+                            <Key className="w-3.5 h-3.5 text-[#80D141]" />
+                            <span>{t('settings.customApiKey', 'Personal Gemini API Key')}</span>
+                          </label>
+
+                          {(draftPrefs.geminiApiKey || apiKeyInput) && (
+                            <button
+                              type="button"
+                              onClick={handleClearKey}
+                              className="text-xs text-[#B3261E] dark:text-[#F2B8B5] hover:underline font-medium cursor-pointer"
+                            >
+                              {isDraftFa ? 'پاک کردن کلید' : 'Clear key'}
+                            </button>
+                          )}
+                        </div>
+
+                        <form onSubmit={handleSaveCustomKey} className="space-y-3">
+                          <div className="relative flex items-center">
+                            <input
+                              type={showKey ? 'text' : 'password'}
+                              value={apiKeyInput}
+                              onChange={(e) => setApiKeyInput(e.target.value)}
+                              placeholder={
+                                isDraftFa
+                                  ? 'کلید اختصاصی خود (AIzaSy...) را وارد کنید'
+                                  : 'Paste your API key (AIzaSy...)'
+                              }
+                              className="w-full pl-3.5 pr-12 py-2.5 rounded-xl bg-white dark:bg-[#22301F] border border-[#DCEAD4] dark:border-[#2E402B] text-xs font-mono text-[#151E14] dark:text-[#E8F2E4] placeholder:font-sans placeholder:text-[#79747E] dark:placeholder:text-[#8D9E8A] focus:outline-none focus:ring-2 focus:ring-[#80D141]"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setShowKey(!showKey)}
+                              className="absolute right-2.5 p-1.5 rounded-lg text-[#79747E] hover:text-[#151E14] dark:hover:text-[#E8F2E4] transition-colors cursor-pointer"
+                              title={showKey ? 'Hide key' : 'Show key'}
+                            >
+                              {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                            </button>
+                          </div>
+
+                          <div className="space-y-2">
+                            <div className="flex items-center justify-between">
+                              <label className="text-xs font-bold text-[#151E14] dark:text-[#E8F2E4] block">
+                                {t('settings.geminiModel', 'Gemini Model')}
+                              </label>
+                              <span className="text-[11px] text-[#556D50] dark:text-[#8EA887]">
+                                {t('settings.presetModels', 'Preset Models')}
+                              </span>
+                            </div>
+
+                            <div className="flex flex-wrap gap-1.5">
+                              {GEMINI_MODEL_PRESETS.map((preset) => {
+                                const isSelected = geminiModelInput === preset.id;
+                                return (
+                                  <button
+                                    key={preset.id}
+                                    type="button"
+                                    onClick={() => {
+                                      soundEngine.playPop();
+                                      setGeminiModelInput(preset.id);
+                                    }}
+                                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors cursor-pointer border ${
+                                      isSelected
+                                        ? 'bg-[#E8F8D8] dark:bg-[#1E3800] border-[#80D141] text-[#1C3700] dark:text-[#80D141] font-bold shadow-2xs'
+                                        : 'bg-white dark:bg-[#202E1E] hover:bg-[#EDF6E8] dark:hover:bg-[#283A24] border-[#DCEAD4] dark:border-[#2E4229] text-[#3B4E37] dark:text-[#C5DDC0]'
+                                    }`}
+                                    title={preset.id}
+                                  >
+                                    {preset.name}
+                                  </button>
+                                );
+                              })}
+                            </div>
+
+                            <input
+                              type="text"
+                              value={geminiModelInput}
+                              onChange={(e) => setGeminiModelInput(e.target.value)}
+                              placeholder="gemini-flash-lite-latest"
+                              className="w-full px-3.5 py-2.5 rounded-xl bg-white dark:bg-[#22301F] border border-[#DCEAD4] dark:border-[#2E402B] text-xs font-mono text-[#151E14] dark:text-[#E8F2E4] focus:outline-none focus:ring-2 focus:ring-[#80D141]"
+                            />
+                          </div>
+
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <button
+                              type="submit"
+                              disabled={
+                                !apiKeyInput.trim() ||
+                                (apiKeyInput === (draftPrefs.geminiApiKey || '') &&
+                                  geminiModelInput === (draftPrefs.geminiModel || DEFAULT_GEMINI_MODEL))
+                              }
+                              className="min-h-[40px] px-4 py-2 rounded-xl bg-[#80D141] hover:bg-[#72BF36] disabled:opacity-40 text-[#0F2600] text-xs font-bold shadow-xs transition-all cursor-pointer"
+                            >
+                              {t('settings.saveKey', 'Save API Key')}
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={handleTestConnection}
+                              disabled={testingKey || (!apiKeyInput.trim() && !draftPrefs.geminiApiKey)}
+                              className="min-h-[40px] px-3.5 py-2 rounded-xl bg-white dark:bg-[#263722] hover:bg-[#E2F2D9] dark:hover:bg-[#2E4229] disabled:opacity-40 text-[#3B4E37] dark:text-[#B6CCB0] text-xs font-bold border border-[#DCEAD4] dark:border-[#33482E] transition-all flex items-center gap-1.5 cursor-pointer"
+                            >
+                              {testingKey ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ShieldCheck className="w-3.5 h-3.5" />}
+                              <span>{t('settings.testKey', 'Test Connection')}</span>
+                            </button>
+                          </div>
+                        </form>
+
+                        <div className="flex items-center justify-between text-[11px] pt-1 flex-wrap gap-2">
+                          <span className="text-[#485B44] dark:text-[#9EB598]">
+                            {isDraftFa ? 'ذخیره‌شده محلی در مرورگر' : 'Stored locally in your browser'}
+                          </span>
+                          <a
+                            href="https://aistudio.google.com/app/apikey"
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-[#3B7E10] dark:text-[#80D141] hover:underline font-bold flex items-center gap-1"
+                          >
+                            <span>{isDraftFa ? 'دریافت کلید رایگان Google AI Studio' : 'Get free key from Google AI Studio'}</span>
+                            <ExternalLink className="w-3 h-3" />
+                          </a>
+                        </div>
+                      </div>
+                    ) : selectedProvider === 'openrouter' ? (
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <label className="text-xs font-bold text-[#151E14] dark:text-[#E8F2E4] flex items-center gap-1.5">
+                            <Key className="w-3.5 h-3.5 text-[#80D141]" />
+                            <span>{t('settings.openRouterApiKey', 'OpenRouter API Key')}</span>
+                          </label>
+
+                          {(draftPrefs.openRouterApiKey || openRouterKeyInput) && (
+                            <button
+                              type="button"
+                              onClick={handleClearKey}
+                              className="text-xs text-[#B3261E] dark:text-[#F2B8B5] hover:underline font-medium cursor-pointer"
+                            >
+                              {isDraftFa ? 'پاک کردن کلید' : 'Clear key'}
+                            </button>
+                          )}
+                        </div>
+
+                        <form onSubmit={handleSaveCustomKey} className="space-y-3">
+                          <div className="relative flex items-center">
+                            <input
+                              type={showKey ? 'text' : 'password'}
+                              value={openRouterKeyInput}
+                              onChange={(e) => setOpenRouterKeyInput(e.target.value)}
+                              placeholder={
+                                isDraftFa
+                                  ? 'کلید OpenRouter خود (sk-or-v1-...) را وارد کنید'
+                                  : 'Paste your OpenRouter key (sk-or-v1-...)'
+                              }
+                              className="w-full pl-3.5 pr-12 py-2.5 rounded-xl bg-white dark:bg-[#22301F] border border-[#DCEAD4] dark:border-[#2E402B] text-xs font-mono text-[#151E14] dark:text-[#E8F2E4] placeholder:font-sans placeholder:text-[#79747E] dark:placeholder:text-[#8D9E8A] focus:outline-none focus:ring-2 focus:ring-[#80D141]"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setShowKey(!showKey)}
+                              className="absolute right-2.5 p-1.5 rounded-lg text-[#79747E] hover:text-[#151E14] dark:hover:text-[#E8F2E4] transition-colors cursor-pointer"
+                              title={showKey ? 'Hide key' : 'Show key'}
+                            >
+                              {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                            </button>
+                          </div>
+
+                          <div className="space-y-2">
+                            <div className="flex items-center justify-between flex-wrap gap-1.5">
+                              <label className="text-xs font-bold text-[#151E14] dark:text-[#E8F2E4] block">
+                                {t('settings.openRouterModel', 'OpenRouter Model')}
+                              </label>
+                              <a
+                                href="https://openrouter.ai/models?variant=free&output_modalities=text"
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-[11px] text-[#3B7E10] dark:text-[#80D141] hover:underline font-bold inline-flex items-center gap-1"
+                              >
+                                <span>{t('settings.openRouterFreeModelsLink', 'Browse Free Text Models')}</span>
+                                <ExternalLink className="w-3 h-3" />
+                              </a>
+                            </div>
+
+                            <div className="flex flex-wrap gap-1.5">
+                              {OPENROUTER_MODEL_PRESETS.map((preset) => {
+                                const isSelected = openRouterModelInput === preset.id;
+                                return (
+                                  <button
+                                    key={preset.id}
+                                    type="button"
+                                    onClick={() => {
+                                      soundEngine.playPop();
+                                      setOpenRouterModelInput(preset.id);
+                                    }}
+                                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors cursor-pointer border ${
+                                      isSelected
+                                        ? 'bg-[#E8F8D8] dark:bg-[#1E3800] border-[#80D141] text-[#1C3700] dark:text-[#80D141] font-bold shadow-2xs'
+                                        : 'bg-white dark:bg-[#202E1E] hover:bg-[#EDF6E8] dark:hover:bg-[#283A24] border-[#DCEAD4] dark:border-[#2E4229] text-[#3B4E37] dark:text-[#C5DDC0]'
+                                    }`}
+                                    title={preset.id}
+                                  >
+                                    {preset.name}
+                                  </button>
+                                );
+                              })}
+                            </div>
+
+                            <input
+                              type="text"
+                              value={openRouterModelInput}
+                              onChange={(e) => setOpenRouterModelInput(e.target.value)}
+                              placeholder="liquid/lfm-2.5-2.6b:free"
+                              className="w-full px-3.5 py-2.5 rounded-xl bg-white dark:bg-[#22301F] border border-[#DCEAD4] dark:border-[#2E402B] text-xs font-mono text-[#151E14] dark:text-[#E8F2E4] focus:outline-none focus:ring-2 focus:ring-[#80D141]"
+                            />
+                            <p className="text-[11px] text-[#485B44] dark:text-[#9EB598]">
+                              {t('settings.openRouterFreeModelsHint', 'OpenRouter offers free models ending with :free (e.g., google/gemini-2.5-flash:free)')}
+                            </p>
+                          </div>
+
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <button
+                              type="submit"
+                              disabled={
+                                !openRouterKeyInput.trim() ||
+                                (openRouterKeyInput === (draftPrefs.openRouterApiKey || '') &&
+                                  openRouterModelInput === (draftPrefs.openRouterModel || DEFAULT_OPENROUTER_MODEL))
+                              }
+                              className="min-h-[40px] px-4 py-2 rounded-xl bg-[#80D141] hover:bg-[#72BF36] disabled:opacity-40 text-[#0F2600] text-xs font-bold shadow-xs transition-all cursor-pointer"
+                            >
+                              {t('settings.saveKey', 'Save API Key')}
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={handleTestConnection}
+                              disabled={testingKey || (!openRouterKeyInput.trim() && !draftPrefs.openRouterApiKey)}
+                              className="min-h-[40px] px-3.5 py-2 rounded-xl bg-white dark:bg-[#263722] hover:bg-[#E2F2D9] dark:hover:bg-[#2E4229] disabled:opacity-40 text-[#3B4E37] dark:text-[#B6CCB0] text-xs font-bold border border-[#DCEAD4] dark:border-[#33482E] transition-all flex items-center gap-1.5 cursor-pointer"
+                            >
+                              {testingKey ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ShieldCheck className="w-3.5 h-3.5" />}
+                              <span>{t('settings.testKey', 'Test Connection')}</span>
+                            </button>
+                          </div>
+                        </form>
+
+                        <div className="flex items-center justify-between text-[11px] pt-1 flex-wrap gap-2">
+                          <span className="text-[#485B44] dark:text-[#9EB598]">
+                            {isDraftFa ? 'ذخیره‌شده محلی در مرورگر' : 'Stored locally in your browser'}
+                          </span>
+                          <a
+                            href="https://openrouter.ai/keys"
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-[#3B7E10] dark:text-[#80D141] hover:underline font-bold flex items-center gap-1"
+                          >
+                            <span>{isDraftFa ? 'دریافت کلید از OpenRouter.ai' : 'Get API key from OpenRouter.ai'}</span>
+                            <ExternalLink className="w-3 h-3" />
+                          </a>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="space-y-3.5">
+                        <div className="flex items-center justify-between">
+                          <label className="text-xs font-bold text-[#151E14] dark:text-[#E8F2E4] flex items-center gap-1.5">
+                            <Cpu className="w-3.5 h-3.5 text-[#80D141]" />
+                            <span>{t('settings.providerCustom', 'Custom OpenAI-Compatible API')}</span>
+                          </label>
+
+                          {(draftPrefs.customOpenAiApiKey ||
+                            customKeyInput ||
+                            customBaseUrlInput ||
+                            customModelInput ||
+                            customApiVersionInput) && (
+                            <button
+                              type="button"
+                              onClick={handleClearKey}
+                              className="text-xs text-[#B3261E] dark:text-[#F2B8B5] hover:underline font-medium cursor-pointer"
+                            >
+                              {isDraftFa ? 'پاک کردن تنظیمات' : 'Clear configuration'}
+                            </button>
+                          )}
+                        </div>
+
+                        <form onSubmit={handleSaveCustomKey} className="space-y-3">
+                          <div className="space-y-1">
+                            <div className="flex items-center justify-between flex-wrap gap-1">
+                              <label className="text-xs font-bold text-[#151E14] dark:text-[#E8F2E4] flex items-center gap-1.5">
+                                <Server className="w-3.5 h-3.5 text-[#80D141]" />
+                                <span>{t('settings.customEndpointLabel', 'API Base URL / Endpoint')}</span>
+                              </label>
+                              {customBaseUrlInput && (
+                                <span className="text-[11px] font-medium text-[#3B7E10] dark:text-[#80D141]">
+                                  {isLocalEndpoint(customBaseUrlInput)
+                                    ? isDraftFa
+                                      ? 'سرویس محلی (بدون نیاز به کلید)'
+                                      : 'Local server (no key needed)'
+                                    : isDraftFa
+                                    ? 'پایانه ابری (نیاز به کلید Bearer)'
+                                    : 'Cloud endpoint (Bearer key required)'}
+                                </span>
+                              )}
+                            </div>
+
+                            <input
+                              type="text"
+                              value={customBaseUrlInput}
+                              onChange={(e) => setCustomBaseUrlInput(e.target.value)}
+                              placeholder="https://api.openai.com/v1"
+                              className="w-full px-3.5 py-2.5 rounded-xl bg-white dark:bg-[#22301F] border border-[#DCEAD4] dark:border-[#2E402B] text-xs font-mono text-[#151E14] dark:text-[#E8F2E4] placeholder:font-sans placeholder:text-[#79747E] dark:placeholder:text-[#8D9E8A] focus:outline-none focus:ring-2 focus:ring-[#80D141]"
+                            />
+                            <p className="text-[11px] text-[#485B44] dark:text-[#9EB598]">
+                              {t('settings.customEndpointHint', 'Works with any OpenAI-compatible /chat/completions endpoint (local or cloud).')}
+                            </p>
+                          </div>
+
+                          <div className="space-y-1">
+                            <div className="flex items-center justify-between">
+                              <label className="text-xs font-bold text-[#151E14] dark:text-[#E8F2E4] flex items-center gap-1.5">
+                                <Key className="w-3.5 h-3.5 text-[#80D141]" />
+                                <span>{t('settings.customApiKeyLabel', 'API Key (Optional for Local)')}</span>
+                              </label>
+                              {customBaseUrlInput && isLocalEndpoint(customBaseUrlInput) && (
+                                <span className="text-[11px] text-[#556D50] dark:text-[#8EA887]">
+                                  {isDraftFa ? 'اختیاری برای سرورهای محلی' : 'Optional for local servers'}
+                                </span>
+                              )}
+                            </div>
+
+                            <div className="relative flex items-center">
+                              <input
+                                type={showKey ? 'text' : 'password'}
+                                value={customKeyInput}
+                                onChange={(e) => setCustomKeyInput(e.target.value)}
+                                placeholder={
+                                  customBaseUrlInput && isLocalEndpoint(customBaseUrlInput)
+                                    ? isDraftFa
+                                      ? 'اختیاری برای سرورهای محلی'
+                                      : 'Optional for local servers'
+                                    : isDraftFa
+                                    ? 'کلید API را وارد کنید (Bearer token)'
+                                    : 'Paste API Key (Bearer token)'
+                                }
+                                className="w-full pl-3.5 pr-12 py-2.5 rounded-xl bg-white dark:bg-[#22301F] border border-[#DCEAD4] dark:border-[#2E402B] text-xs font-mono text-[#151E14] dark:text-[#E8F2E4] placeholder:font-sans placeholder:text-[#79747E] dark:placeholder:text-[#8D9E8A] focus:outline-none focus:ring-2 focus:ring-[#80D141]"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => setShowKey(!showKey)}
+                                className="absolute right-2.5 p-1.5 rounded-lg text-[#79747E] hover:text-[#151E14] dark:hover:text-[#E8F2E4] transition-colors cursor-pointer"
+                                title={showKey ? 'Hide key' : 'Show key'}
+                              >
+                                {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <div className="space-y-1">
+                              <label className="text-xs font-bold text-[#151E14] dark:text-[#E8F2E4] flex items-center gap-1.5">
+                                <Zap className="w-3.5 h-3.5 text-[#80D141]" />
+                                <span>{t('settings.customModelLabel', 'Model Name / ID')}</span>
+                              </label>
+                              <input
+                                type="text"
+                                value={customModelInput}
+                                onChange={(e) => setCustomModelInput(e.target.value)}
+                                placeholder="e.g. gpt-4o, llama3.3, deepseek-chat"
+                                className="w-full px-3.5 py-2.5 rounded-xl bg-white dark:bg-[#22301F] border border-[#DCEAD4] dark:border-[#2E402B] text-xs font-mono text-[#151E14] dark:text-[#E8F2E4] placeholder:font-sans placeholder:text-[#79747E] dark:placeholder:text-[#8D9E8A] focus:outline-none focus:ring-2 focus:ring-[#80D141]"
+                              />
+                            </div>
+
+                            <div className="space-y-1">
+                              <label className="text-xs font-bold text-[#151E14] dark:text-[#E8F2E4] flex items-center gap-1.5">
+                                <Sliders className="w-3.5 h-3.5 text-[#80D141]" />
+                                <span>{t('settings.customApiVersionLabel', 'API Version (Optional)')}</span>
+                              </label>
+                              <input
+                                type="text"
+                                value={customApiVersionInput}
+                                onChange={(e) => setCustomApiVersionInput(e.target.value)}
+                                placeholder="e.g. 2024-02-15-preview (Azure)"
+                                className="w-full px-3.5 py-2.5 rounded-xl bg-white dark:bg-[#22301F] border border-[#DCEAD4] dark:border-[#2E402B] text-xs font-mono text-[#151E14] dark:text-[#E8F2E4] placeholder:font-sans placeholder:text-[#79747E] dark:placeholder:text-[#8D9E8A] focus:outline-none focus:ring-2 focus:ring-[#80D141]"
+                              />
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2 pt-1 flex-wrap">
+                            <button
+                              type="submit"
+                              className="min-h-[40px] px-4 py-2 rounded-xl bg-[#80D141] hover:bg-[#72BF36] text-[#0F2600] text-xs font-bold shadow-xs transition-all cursor-pointer"
+                            >
+                              {t('settings.saveKey', 'Save Configuration')}
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={handleTestConnection}
+                              disabled={testingKey}
+                              className="min-h-[40px] px-3.5 py-2 rounded-xl bg-white dark:bg-[#263722] hover:bg-[#E2F2D9] dark:hover:bg-[#2E4229] disabled:opacity-40 text-[#3B4E37] dark:text-[#B6CCB0] text-xs font-bold border border-[#DCEAD4] dark:border-[#33482E] transition-all flex items-center gap-1.5 cursor-pointer"
+                            >
+                              {testingKey ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ShieldCheck className="w-3.5 h-3.5" />}
+                              <span>{t('settings.testKey', 'Test Connection')}</span>
+                            </button>
+                          </div>
+                        </form>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Test Result Feedback Banners */}
+                  <AnimatePresence>
+                    {keySavedMessage && (
+                      <motion.div
+                        initial={{ opacity: 0, y: -6 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -6 }}
+                        className="p-3 rounded-xl bg-[#E8F8D8] dark:bg-[#1E3800] border border-[#80D141]/50 text-xs font-bold text-[#1C3700] dark:text-[#80D141] flex items-center gap-2"
+                      >
+                        <CheckCircle2 className="w-4 h-4 shrink-0" />
+                        <span>{keySavedMessage}</span>
+                      </motion.div>
+                    )}
+
+                    {testResult && (
+                      <motion.div
+                        initial={{ opacity: 0, y: -6 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -6 }}
+                        className={`p-3 rounded-xl border text-xs font-medium flex items-start gap-2 ${
+                          testResult.success
+                            ? 'bg-[#E8F8D8] dark:bg-[#1E3800] border-[#80D141]/50 text-[#1C3700] dark:text-[#80D141]'
+                            : 'bg-red-50 dark:bg-red-950/60 border-red-200 dark:border-red-900/60 text-red-800 dark:text-red-300'
+                        }`}
+                      >
+                        {testResult.success ? (
+                          <ShieldCheck className="w-4 h-4 shrink-0 text-[#80D141] mt-0.5" />
+                        ) : (
+                          <AlertCircle className="w-4 h-4 shrink-0 text-red-600 dark:text-red-400 mt-0.5" />
+                        )}
+                        <div className="flex-1">
+                          <span className="font-bold">
+                            {testResult.success
+                              ? isDraftFa
+                                ? 'اتصال موفق: '
+                                : 'Connection Verified: '
+                              : isDraftFa
+                              ? 'خطا در اتصال: '
+                              : 'Connection Issue: '}
+                          </span>
+                          <span>{testResult.message}</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setTestResult(null)}
+                          className="p-0.5 rounded-full hover:bg-black/10 transition-colors cursor-pointer"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+
+                  {/* Interactive API Key Tester & Single-Turn Query Playground */}
+                  <div
+                    id="section-api-test-playground"
+                    className="p-4 sm:p-5 rounded-2xl bg-[#F7FAF4] dark:bg-[#1C2919] border border-[#DCEAD4] dark:border-[#2A3E26] space-y-3.5"
+                  >
+                    <div className="flex items-start gap-2.5">
+                      <div className="w-8 h-8 rounded-xl bg-[#E8F8D8] dark:bg-[#20361C] border border-[#80D141]/50 flex items-center justify-center text-[#234A00] dark:text-[#80D141] shrink-0">
+                        <Terminal className="w-4 h-4 stroke-[2.5]" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <h4 className="text-xs sm:text-sm font-bold text-[#151E14] dark:text-[#E8F2E4]">
+                          {t('settings.testPlaygroundTitle', 'API Key Tester & Query Playground')}
+                        </h4>
+                        <p className="text-[11px] text-[#485B44] dark:text-[#9EB598] mt-0.5">
+                          {t(
+                            'settings.testPlaygroundDesc',
+                            'Send a single-turn prompt to verify your API key and chosen model respond accurately in real time.'
+                          )}
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Quick Sample Prompts */}
+                    <div className="space-y-1.5">
+                      <span className="text-[11px] font-semibold text-[#485B44] dark:text-[#9EB598]">
+                        {t('settings.samplePrompts', 'Quick Examples')}
+                      </span>
+                      <div className="flex flex-wrap gap-1.5">
                         {[
-                          isDraftFa ? '🚫 بعد از ساعت ۵ عصر کار سنگین نگذار' : '🚫 No heavy work after 5 PM',
-                          isDraftFa ? '☕ بعد از هر کار فکری ۱۰ دقیقه استراحت بده' : '☕ 10min buffer between focus blocks',
-                          isDraftFa ? '🏃 کارهای حرکتی را اول صبح قرار بده' : '🏃 Put physical tasks in morning',
-                        ].map((idea) => (
+                          t('settings.samplePrompt1', "What's your name and model version?"),
+                          t('settings.samplePrompt2', 'Give 1 micro-step to start when overwhelmed (under 15 words).'),
+                          t('settings.samplePrompt3', 'Give 1 practical tip to break task paralysis (under 15 words).'),
+                        ].map((sampleQ) => (
                           <button
-                            key={idea}
+                            key={sampleQ}
                             type="button"
                             onClick={() => {
-                              soundEngine.playPop();
-                              setPlannerInstructionsInput((prev) => {
-                                const trimmed = prev.trim();
-                                return trimmed ? `${trimmed}\n${idea}` : idea;
-                              });
+                              setTestPromptInput(sampleQ);
+                              handleSendTestPrompt(sampleQ);
                             }}
-                            className="text-[10px] px-2.5 py-1 rounded-lg bg-[#EDF6E8] dark:bg-[#1E2B1A] hover:bg-[#E2F2D9] text-[#2F6B12] dark:text-[#9DD97A] border border-[#DCEAD4] dark:border-[#2C4027] font-medium transition-colors cursor-pointer"
+                            disabled={testingPrompt}
+                            className="px-2.5 py-1.5 rounded-xl text-[11px] font-medium bg-white dark:bg-[#243321] hover:bg-[#E8F8D8] dark:hover:bg-[#2C4028] text-[#3B4E37] dark:text-[#C5DDC0] border border-[#DCEAD4] dark:border-[#30442B] transition-colors cursor-pointer disabled:opacity-50 text-start"
                           >
-                            {idea}
+                            {sampleQ}
                           </button>
                         ))}
                       </div>
-
-                      <div className="flex items-center justify-between pt-1">
-                        <div className="flex items-center gap-2">
-                          <button
-                            type="submit"
-                            disabled={plannerInstructionsInput.trim() === (draftPrefs.plannerCustomInstructions || '')}
-                            className="px-4 py-2 rounded-xl bg-[#80D141] hover:bg-[#72BF36] disabled:opacity-40 text-[#0F2600] text-xs font-bold shadow-xs transition-all flex items-center gap-1.5 cursor-pointer"
-                          >
-                            <Save className="w-3.5 h-3.5" />
-                            <span>{t('settings.saveInstructions', 'Save Instructions')}</span>
-                          </button>
-
-                          {(plannerInstructionsInput || draftPrefs.plannerCustomInstructions) && (
-                            <button
-                              type="button"
-                              onClick={handleClearPlannerInstructions}
-                              className="px-3 py-2 rounded-xl bg-white dark:bg-[#22301F] text-[#B3261E] dark:text-[#F2B8B5] hover:bg-[#FFEAEA] dark:hover:bg-[#3B1C1A] text-xs font-bold border border-[#DCEAD4] dark:border-[#33482E] transition-all cursor-pointer"
-                            >
-                              {isDraftFa ? 'پاک کردن' : 'Clear'}
-                            </button>
-                          )}
-                        </div>
-
-                        <span className="text-[11px] text-[#485B44] dark:text-[#9EB598]">
-                          {isDraftFa ? 'در تمام برنامه‌ریزی‌های هوشمند اعمال می‌شود' : 'Applied across all AI schedules'}
-                        </span>
-                      </div>
-                    </form>
-
-                    <AnimatePresence>
-                      {instructionsSavedMessage && (
-                        <motion.div
-                          initial={{ opacity: 0, y: -6 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          exit={{ opacity: 0, y: -6 }}
-                          className="p-2.5 rounded-xl bg-[#E8F8D8] dark:bg-[#1E3800] border border-[#80D141]/50 text-xs font-bold text-[#1C3700] dark:text-[#80D141] flex items-center gap-2"
-                        >
-                          <CheckCircle2 className="w-4 h-4 shrink-0" />
-                          <span>{instructionsSavedMessage}</span>
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </section>
-        </div>
-
-        {/* Right Column: Workflows, Categories, Audio & Data Management */}
-        <div className="lg:col-span-5 space-y-6">
-          {/* Feature 1: Reorder Navigation Sections */}
-          <section id="section-settings-navigation" className="rounded-[28px] bg-white dark:bg-[#182316] border border-[#D8E8D0] dark:border-[#22301F] shadow-sm transition-all duration-200 overflow-hidden">
-            <div
-              role="button"
-              tabIndex={0}
-              onClick={() => toggleSection('navigation')}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault();
-                  toggleSection('navigation');
-                }
-              }}
-              aria-expanded={expandedSections['navigation']}
-              className="w-full p-4 sm:p-5 flex items-center justify-between text-start gap-3 hover:bg-[#F9FAF6] dark:hover:bg-[#1C2819] transition-colors cursor-pointer group"
-            >
-              <div className="flex items-center gap-3 min-w-0">
-                <div className="w-9 h-9 rounded-xl bg-[#E8F8D8] dark:bg-[#1E3800] border border-[#80D141]/50 flex items-center justify-center text-[#234A00] dark:text-[#80D141] shrink-0 group-hover:scale-105 transition-transform">
-                  <Sliders className="w-4 h-4" />
-                </div>
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <h3 className="font-display text-sm sm:text-base font-bold text-[#151E14] dark:text-[#E8F2E4]">
-                      {t('settings.navOrderSection', 'Navigation Section Order')}
-                    </h3>
-                    <span className="text-[11px] font-semibold text-[#3B7E10] dark:text-[#80D141] px-2 py-0.5 rounded-full bg-[#E8F8D8] dark:bg-[#1E3800] border border-[#80D141]/30">
-                      {isDraftFa ? `${currentNavOrder.length} بخش` : `${currentNavOrder.length} tabs`}
-                    </span>
-                  </div>
-                  <p className="text-xs text-[#485B44] dark:text-[#9EB598] truncate">
-                    {t('settings.navOrderDesc', 'Reorder tabs in the navigation bar')}
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2 shrink-0">
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleResetNavOrder();
-                  }}
-                  className="px-2.5 py-1 rounded-full text-xs font-bold text-[#3B7E10] dark:text-[#80D141] bg-[#EDF6E8] dark:bg-[#1E2B1A] hover:bg-[#E2F2D9] dark:hover:bg-[#283A23] border border-[#D8E8D0] dark:border-[#273722] flex items-center gap-1 transition-colors cursor-pointer"
-                  title={t('settings.resetNavOrder', 'Reset Order')}
-                >
-                  <RotateCcw className="w-3 h-3" />
-                  <span className="hidden sm:inline">{t('settings.resetNavOrder', 'Reset Order')}</span>
-                </button>
-                <div className="w-8 h-8 rounded-full flex items-center justify-center text-[#485B44] dark:text-[#9EB598] group-hover:text-[#151E14] dark:group-hover:text-[#E8F2E4] group-hover:bg-[#EDF6E8] dark:group-hover:bg-[#202E1E] transition-colors">
-                  <ChevronDown className={`w-4 h-4 transition-transform duration-200 ${expandedSections['navigation'] ? 'rotate-180' : ''}`} />
-                </div>
-              </div>
-            </div>
-
-            <AnimatePresence initial={false}>
-              {expandedSections['navigation'] && (
-                <motion.div
-                  initial={{ height: 0, opacity: 0 }}
-                  animate={{ height: 'auto', opacity: 1 }}
-                  exit={{ height: 0, opacity: 0 }}
-                  transition={{ duration: 0.22, ease: 'easeInOut' }}
-                >
-                  <div className="px-5 pb-5 sm:px-6 sm:pb-6 pt-2 border-t border-[#DCEAD4]/80 dark:border-[#263722] space-y-4">
-                    {/* Interactive Reordering List */}
-                    <div className="space-y-2 pt-1">
-                      {currentNavOrder.map((secId, index) => {
-                        const icon = SECTION_ICONS[secId];
-                        const label = t(`nav.${secId}`, secId);
-                        const isFirst = index === 0;
-                        const isLast = index === currentNavOrder.length - 1;
-
-                        return (
-                          <motion.div
-                            key={secId}
-                            layout
-                            transition={{ type: 'spring', stiffness: 500, damping: 35 }}
-                            className="flex items-center justify-between p-3 sm:p-3.5 rounded-2xl bg-[#F7FAF4] dark:bg-[#1C2919] border border-[#DCEAD4] dark:border-[#2A3E26] hover:border-[#80D141]/60 transition-colors group"
-                          >
-                            <div className="flex items-center gap-3 min-w-0">
-                              {/* Position Number */}
-                              <span className="w-6 h-6 rounded-full bg-white dark:bg-[#263722] border border-[#DCEAD4] dark:border-[#344D2F] flex items-center justify-center text-xs font-bold text-[#485B44] dark:text-[#9EB598] shrink-0">
-                                {isDraftFa ? (index + 1).toLocaleString('fa-IR') : index + 1}
-                              </span>
-
-                              {/* Icon */}
-                              <div className="w-9 h-9 rounded-xl bg-[#E8F8D8] dark:bg-[#1E3800] text-[#1E4300] dark:text-[#80D141] flex items-center justify-center shrink-0">
-                                {icon}
-                              </div>
-
-                              {/* Section Name */}
-                              <h4 className="font-bold text-sm text-[#151E14] dark:text-[#E8F2E4] truncate">
-                                {label}
-                              </h4>
-                            </div>
-
-                            {/* Reorder Buttons (Move Up / Move Down) */}
-                            <div className="flex items-center gap-1 shrink-0">
-                              <button
-                                type="button"
-                                onClick={() => handleMoveNavSection(index, 'up')}
-                                disabled={isFirst}
-                                aria-label={`Move ${label} Up`}
-                                className="p-2 rounded-xl bg-white dark:bg-[#263722] border border-[#DCEAD4] dark:border-[#33482E] text-[#485B44] dark:text-[#9EB598] hover:text-[#151E14] dark:hover:text-[#E8F2E4] hover:bg-[#E2F2D9] dark:hover:bg-[#2E4229] disabled:opacity-30 disabled:pointer-events-none transition-all active:scale-90 cursor-pointer"
-                                title="Move Up"
-                              >
-                                <ArrowUp className="w-4 h-4 stroke-[2.5]" />
-                              </button>
-
-                              <button
-                                type="button"
-                                onClick={() => handleMoveNavSection(index, 'down')}
-                                disabled={isLast}
-                                aria-label={`Move ${label} Down`}
-                                className="p-2 rounded-xl bg-white dark:bg-[#263722] border border-[#DCEAD4] dark:border-[#33482E] text-[#485B44] dark:text-[#9EB598] hover:text-[#151E14] dark:hover:text-[#E8F2E4] hover:bg-[#E2F2D9] dark:hover:bg-[#2E4229] disabled:opacity-30 disabled:pointer-events-none transition-all active:scale-90 cursor-pointer"
-                                title="Move Down"
-                              >
-                                <ArrowDown className="w-4 h-4 stroke-[2.5]" />
-                              </button>
-                            </div>
-                          </motion.div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </section>
-
-          {/* Feature: Timer Tabs Reordering (Focus vs Tracker - Expandable) */}
-          <section id="section-settings-timer-tabs" className="rounded-[28px] bg-white dark:bg-[#182316] border border-[#D8E8D0] dark:border-[#22301F] shadow-sm transition-all duration-200 overflow-hidden">
-            <div
-              role="button"
-              tabIndex={0}
-              onClick={() => toggleSection('focus')}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault();
-                  toggleSection('focus');
-                }
-              }}
-              aria-expanded={expandedSections['focus']}
-              className="w-full p-4 sm:p-5 flex items-center justify-between text-start gap-3 hover:bg-[#F9FAF6] dark:hover:bg-[#1C2819] transition-colors cursor-pointer group"
-            >
-              <div className="flex items-center gap-3 min-w-0">
-                <div className="w-9 h-9 rounded-xl bg-[#E8F8D8] dark:bg-[#1E3800] border border-[#80D141]/50 flex items-center justify-center text-[#234A00] dark:text-[#80D141] shrink-0 group-hover:scale-105 transition-transform">
-                  <Timer className="w-4 h-4" />
-                </div>
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <h3 className="font-display text-sm sm:text-base font-bold text-[#151E14] dark:text-[#E8F2E4]">
-                      {isDraftFa ? 'زبانه و پیش‌تنظیم‌های تایمر' : 'Timer Tabs & Focus Presets'}
-                    </h3>
-                    <span className="text-[11px] font-semibold text-[#3B7E10] dark:text-[#80D141] px-2 py-0.5 rounded-full bg-[#E8F8D8] dark:bg-[#1E3800] border border-[#80D141]/30">
-                      {isDraftFa ? `${currentFocusPresets.length} پیش‌تنظیم` : `${currentFocusPresets.length} presets`}
-                    </span>
-                  </div>
-                  <p className="text-xs text-[#485B44] dark:text-[#9EB598] truncate">
-                    {isDraftFa ? 'ترتیب زبانه‌ها و ویرایش/افزودن پیش‌تنظیم‌های تمرکز' : 'Reorder tabs and customize focus timer presets'}
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2 shrink-0">
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleResetTimerTabOrder();
-                  }}
-                  className="px-2.5 py-1 rounded-full text-xs font-bold text-[#3B7E10] dark:text-[#80D141] bg-[#EDF6E8] dark:bg-[#1E2B1A] hover:bg-[#E2F2D9] dark:hover:bg-[#283A23] border border-[#D8E8D0] dark:border-[#273722] flex items-center gap-1 transition-colors cursor-pointer"
-                  title={t('settings.resetTimerTabOrder', 'Reset Tabs Order')}
-                >
-                  <RotateCcw className="w-3 h-3" />
-                  <span className="hidden sm:inline">{t('settings.resetNavOrder', 'Reset Order')}</span>
-                </button>
-                <div className="w-8 h-8 rounded-full flex items-center justify-center text-[#485B44] dark:text-[#9EB598] group-hover:text-[#151E14] dark:group-hover:text-[#E8F2E4] group-hover:bg-[#EDF6E8] dark:group-hover:bg-[#202E1E] transition-colors">
-                  <ChevronDown className={`w-4 h-4 transition-transform duration-200 ${expandedSections['focus'] ? 'rotate-180' : ''}`} />
-                </div>
-              </div>
-            </div>
-
-            <AnimatePresence initial={false}>
-              {expandedSections['focus'] && (
-                <motion.div
-                  initial={{ height: 0, opacity: 0 }}
-                  animate={{ height: 'auto', opacity: 1 }}
-                  exit={{ height: 0, opacity: 0 }}
-                  transition={{ duration: 0.22, ease: 'easeInOut' }}
-                >
-                  <div className="px-5 pb-5 sm:px-6 sm:pb-6 pt-2 border-t border-[#DCEAD4]/80 dark:border-[#263722] space-y-6">
-                    {/* Tab 1: Interactive Reordering List */}
-                    <div className="space-y-2 pt-1">
-                      <div className="text-xs font-bold text-[#485B44] dark:text-[#9EB598] uppercase tracking-wider mb-2">
-                        {t('settings.timerTabOrderSection', 'Timer Tabs Order')}
-                      </div>
-                      {currentFocusTabOrder.map((tabId, index) => {
-                        const isFocus = tabId === 'focus';
-                        const icon = isFocus ? <Timer className="w-5 h-5" /> : <Clock className="w-5 h-5" />;
-                        const label = isFocus ? t('timer.tabFocus') : t('timer.tabTracker');
-                        const desc = isFocus ? t('settings.timerFocusDesc') : t('settings.timerTrackerDesc');
-                        const isFirst = index === 0;
-                        const isLast = index === currentFocusTabOrder.length - 1;
-
-                        return (
-                          <motion.div
-                            key={tabId}
-                            layout
-                            transition={{ type: 'spring', stiffness: 500, damping: 35 }}
-                            className="flex items-center justify-between p-3 sm:p-3.5 rounded-2xl bg-[#F7FAF4] dark:bg-[#1C2919] border border-[#DCEAD4] dark:border-[#2A3E26] hover:border-[#80D141]/60 transition-colors group"
-                          >
-                            <div className="flex items-center gap-3 min-w-0">
-                              {/* Position Number */}
-                              <span className="w-6 h-6 rounded-full bg-white dark:bg-[#263722] border border-[#DCEAD4] dark:border-[#344D2F] flex items-center justify-center text-xs font-bold text-[#485B44] dark:text-[#9EB598] shrink-0">
-                                {isDraftFa ? (index + 1).toLocaleString('fa-IR') : index + 1}
-                              </span>
-
-                              {/* Icon */}
-                              <div className="w-9 h-9 rounded-xl bg-[#E8F8D8] dark:bg-[#1E3800] text-[#1E4300] dark:text-[#80D141] flex items-center justify-center shrink-0">
-                                {icon}
-                              </div>
-
-                              {/* Name & Subtitle */}
-                              <div className="min-w-0">
-                                <h4 className="font-bold text-sm text-[#151E14] dark:text-[#E8F2E4] truncate">
-                                  {label}
-                                </h4>
-                                <p className="text-[11px] text-[#485B44] dark:text-[#9EB598] truncate hidden sm:block">
-                                  {desc}
-                                </p>
-                              </div>
-                            </div>
-
-                            {/* Reorder Buttons (Move Up / Move Down) */}
-                            <div className="flex items-center gap-1 shrink-0">
-                              <button
-                                type="button"
-                                onClick={() => handleMoveTimerTab(index, 'up')}
-                                disabled={isFirst}
-                                aria-label={`Move ${label} Up`}
-                                className="p-2 rounded-xl bg-white dark:bg-[#263722] border border-[#DCEAD4] dark:border-[#33482E] text-[#485B44] dark:text-[#9EB598] hover:text-[#151E14] dark:hover:text-[#E8F2E4] hover:bg-[#E2F2D9] dark:hover:bg-[#2E4229] disabled:opacity-30 disabled:pointer-events-none transition-all active:scale-90 cursor-pointer"
-                                title="Move Up"
-                              >
-                                <ArrowUp className="w-4 h-4 stroke-[2.5]" />
-                              </button>
-
-                              <button
-                                type="button"
-                                onClick={() => handleMoveTimerTab(index, 'down')}
-                                disabled={isLast}
-                                aria-label={`Move ${label} Down`}
-                                className="p-2 rounded-xl bg-white dark:bg-[#263722] border border-[#DCEAD4] dark:border-[#33482E] text-[#485B44] dark:text-[#9EB598] hover:text-[#151E14] dark:hover:text-[#E8F2E4] hover:bg-[#E2F2D9] dark:hover:bg-[#2E4229] disabled:opacity-30 disabled:pointer-events-none transition-all active:scale-90 cursor-pointer"
-                                title="Move Down"
-                              >
-                                <ArrowDown className="w-4 h-4 stroke-[2.5]" />
-                              </button>
-                            </div>
-                          </motion.div>
-                        );
-                      })}
                     </div>
 
-                    {/* Part 2: Focus Timer Presets Customization */}
-                    <div className="pt-4 border-t border-[#DCEAD4]/80 dark:border-[#263722] space-y-3">
-                      <div className="flex items-center justify-between gap-3 flex-wrap">
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <h4 className="font-bold text-sm text-[#151E14] dark:text-[#E8F2E4]">
-                              {t('focus.presetsTitle', 'Focus Timer Presets')}
-                            </h4>
-                            <span className="text-[11px] font-semibold text-[#3B7E10] dark:text-[#80D141] px-2 py-0.5 rounded-full bg-[#E8F8D8] dark:bg-[#1E3800] border border-[#80D141]/30">
-                              {isDraftFa ? `${toPersianDigits(currentFocusPresets.length)} پیش‌تنظیم` : `${currentFocusPresets.length} presets`}
-                            </span>
-                          </div>
-                          <p className="text-xs text-[#485B44] dark:text-[#9EB598] mt-0.5">
-                            {t('focus.presetsDesc', 'Customize, add, or delete the timer durations and modes available in your focus sessions.')}
-                          </p>
-                        </div>
-
-                        <div className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            id="btn-settings-add-preset"
-                            onClick={handleOpenSettingsAddPreset}
-                            className="px-3 py-1.5 rounded-xl bg-[#80D141] hover:bg-[#72BF36] text-[#0F2600] text-xs font-bold shadow-xs flex items-center gap-1.5 transition-all cursor-pointer"
-                          >
-                            <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
-                            <span>{t('focus.addPreset', 'Add Preset')}</span>
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={handleResetSettingsPresets}
-                            className="px-2.5 py-1.5 rounded-xl bg-[#EDF6E8] dark:bg-[#1E2B1A] hover:bg-[#E2F2D9] dark:hover:bg-[#283A23] text-[#245209] dark:text-[#80D141] text-xs font-bold border border-[#DCEAD4] dark:border-[#263722] flex items-center gap-1.5 transition-colors cursor-pointer"
-                            title={t('focus.resetPresets', 'Reset to Defaults')}
-                          >
-                            <RotateCcw className="w-3.5 h-3.5" />
-                            <span className="hidden sm:inline">{t('focus.resetPresets', 'Reset to Defaults')}</span>
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Success / Error Messages in Settings */}
-                      {settingsPresetSuccess && (
-                        <div className="p-2.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-300 dark:border-emerald-800 text-xs font-bold text-emerald-800 dark:text-emerald-200 flex items-center gap-2">
-                          <Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
-                          <span>{settingsPresetSuccess}</span>
-                        </div>
-                      )}
-
-                      {settingsPresetError && (
-                        <div className="p-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/60 border border-rose-300 dark:border-rose-800 text-xs font-bold text-rose-800 dark:text-rose-200 flex items-center gap-2">
-                          <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0" />
-                          <span>{settingsPresetError}</span>
-                        </div>
-                      )}
-
-                      {/* Presets List in Settings */}
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
-                        {currentFocusPresets.map((preset) => (
-                          <div
-                            key={preset.id}
-                            className="p-3 rounded-2xl bg-[#F7FAF4] dark:bg-[#1C2919] border border-[#DCEAD4] dark:border-[#2A3E26] flex items-center justify-between gap-2.5 group"
-                          >
-                            <div className="flex items-center gap-2.5 min-w-0">
-                              <span className="w-9 h-9 rounded-xl bg-white dark:bg-[#263722] border border-[#DCEAD4] dark:border-[#33482E] flex items-center justify-center text-lg shrink-0 shadow-2xs">
-                                {preset.icon || '⏱️'}
-                              </span>
-                              <div className="min-w-0">
-                                <div className="flex items-center gap-1.5 flex-wrap">
-                                  <h5 className="font-bold text-xs text-[#151E14] dark:text-[#E8F2E4] truncate">
-                                    {preset.label}
-                                  </h5>
-                                  <span className="text-[10px] font-bold px-1.5 py-0.2 rounded-full bg-[#EDF6E8] dark:bg-[#233520] text-[#3B7E10] dark:text-[#80D141] border border-[#D0E2C8] dark:border-[#2E432A]">
-                                    {preset.minutes === 0
-                                      ? (isDraftFa ? 'فلومودورو' : 'Flowmodoro')
-                                      : `${isDraftFa ? toPersianDigits(preset.minutes) : preset.minutes} ${t('focus.minsUnit')}`}
-                                  </span>
-                                </div>
-                                {preset.desc && (
-                                  <p className="text-[10px] text-[#485B44] dark:text-[#9EB598] truncate mt-0.5">
-                                    {preset.desc}
-                                  </p>
-                                )}
-                              </div>
-                            </div>
-
-                            <div className="flex items-center gap-1 shrink-0">
-                              <button
-                                type="button"
-                                onClick={() => handleOpenSettingsEditPreset(preset)}
-                                className="p-1.5 rounded-lg bg-white dark:bg-[#263722] hover:bg-[#E8F8D8] dark:hover:bg-[#2E4229] text-[#485B44] dark:text-[#9EB598] hover:text-[#151E14] dark:hover:text-[#E8F2E4] border border-[#DCEAD4] dark:border-[#33482E] transition-all cursor-pointer shadow-2xs"
-                                title={t('focus.editPreset', 'Edit Preset')}
-                              >
-                                <Pencil className="w-3.5 h-3.5" />
-                              </button>
-
-                              <button
-                                type="button"
-                                onClick={() => handleDeleteSettingsPreset(preset.id)}
-                                disabled={currentFocusPresets.length <= 1}
-                                className="p-1.5 rounded-lg bg-white dark:bg-[#263722] hover:bg-rose-50 dark:hover:bg-rose-950/40 text-[#485B44] dark:text-[#9EB598] hover:text-rose-600 dark:hover:text-rose-400 border border-[#DCEAD4] dark:border-[#33482E] disabled:opacity-30 disabled:cursor-not-allowed transition-all cursor-pointer shadow-2xs"
-                                title={t('focus.deletePreset', 'Delete Preset')}
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-
-            {/* Modal for Adding/Editing Preset from Settings */}
-            <AnimatePresence>
-              {showSettingsPresetModal && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-                  <motion.div
-                    initial={{ opacity: 0, scale: 0.95, y: 10 }}
-                    animate={{ opacity: 1, scale: 1, y: 0 }}
-                    exit={{ opacity: 0, scale: 0.95, y: 10 }}
-                    className="w-full max-w-md bg-white dark:bg-[#182316] rounded-3xl p-5 sm:p-6 shadow-2xl border border-[#DCEAD4] dark:border-[#263722] max-h-[90vh] flex flex-col overflow-hidden"
-                  >
-                    <div className="flex items-center justify-between pb-3 border-b border-[#DCEAD4] dark:border-[#263722] shrink-0">
-                      <div className="flex items-center gap-2">
-                        <div className="w-8 h-8 rounded-xl bg-[#E8F8D8] dark:bg-[#1E3800] text-[#1E4300] dark:text-[#80D141] flex items-center justify-center">
-                          {settingsIsCreatingPreset ? <Plus className="w-4 h-4" /> : <Pencil className="w-4 h-4" />}
-                        </div>
-                        <h4 className="font-bold text-sm sm:text-base text-[#151E14] dark:text-[#E8F2E4]">
-                          {settingsIsCreatingPreset ? t('focus.addPreset', 'Add Preset') : t('focus.editPreset', 'Edit Preset')}
-                        </h4>
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={() => setShowSettingsPresetModal(false)}
-                        className="w-8 h-8 rounded-full flex items-center justify-center text-[#485B44] dark:text-[#9EB598] hover:bg-[#EDF6E8] dark:hover:bg-[#202E1E] transition-colors cursor-pointer"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
-                    </div>
-
-                    {settingsPresetError && (
-                      <div className="mt-3 p-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/60 border border-rose-300 dark:border-rose-800 text-xs font-bold text-rose-800 dark:text-rose-200 flex items-center gap-2">
-                        <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0" />
-                        <span>{settingsPresetError}</span>
-                      </div>
-                    )}
-
+                    {/* Prompt Input & Send */}
                     <form
                       onSubmit={(e) => {
                         e.preventDefault();
-                        handleSaveSettingsPreset();
+                        handleSendTestPrompt();
                       }}
-                      className="flex-1 overflow-y-auto py-4 space-y-4"
+                      className="flex flex-col sm:flex-row gap-2"
                     >
-                      <div>
-                        <label className="block text-xs font-bold text-[#151E14] dark:text-[#E8F2E4] mb-1">
-                          {t('focus.presetName', 'Preset Name')} *
-                        </label>
-                        <input
-                          type="text"
-                          value={settingsPresetLabel}
-                          onChange={(e) => setSettingsPresetLabel(e.target.value)}
-                          placeholder={t('focus.presetNamePlaceholder', 'e.g. Ultra Deep Work, Power Nap...')}
-                          className="w-full px-3.5 py-2.5 rounded-xl bg-[#F7FAF4] dark:bg-[#22301F] border border-[#DCEAD4] dark:border-[#2E402B] text-xs text-[#151E14] dark:text-[#E8F2E4] focus:outline-none focus:ring-2 focus:ring-[#80D141]"
-                          required
-                          autoFocus
-                        />
-                      </div>
+                      <input
+                        type="text"
+                        value={testPromptInput}
+                        onChange={(e) => setTestPromptInput(e.target.value)}
+                        placeholder={t(
+                          'settings.testPromptPlaceholder',
+                          'Type a prompt to test your API key (e.g., What is your model name?)...'
+                        )}
+                        className="w-full sm:flex-1 min-w-0 px-3.5 py-2.5 rounded-xl bg-white dark:bg-[#22301F] border border-[#DCEAD4] dark:border-[#2E402B] text-xs text-[#151E14] dark:text-[#E8F2E4] placeholder:text-[#79747E] dark:placeholder:text-[#8D9E8A] focus:outline-none focus:ring-2 focus:ring-[#80D141]"
+                      />
 
-                      <div>
-                        <label className="block text-xs font-bold text-[#151E14] dark:text-[#E8F2E4] mb-1">
-                          {t('focus.presetMinutes', 'Duration (Minutes, 0 for Flowmodoro)')} *
-                        </label>
-                        <div className="flex items-center gap-2">
-                          <input
-                            type="number"
-                            min={0}
-                            max={360}
-                            value={settingsPresetMinutes}
-                            onChange={(e) => setSettingsPresetMinutes(Math.max(0, parseInt(e.target.value, 10) || 0))}
-                            className="w-28 px-3.5 py-2.5 rounded-xl bg-[#F7FAF4] dark:bg-[#22301F] border border-[#DCEAD4] dark:border-[#2E402B] text-xs text-[#151E14] dark:text-[#E8F2E4] focus:outline-none focus:ring-2 focus:ring-[#80D141] font-mono text-center"
-                            required
-                          />
-                          <span className="text-xs text-[#485B44] dark:text-[#9EB598]">
-                            {settingsPresetMinutes === 0
-                              ? (isDraftFa ? '🚀 شمارش رو به بالا (فلومودورو)' : '🚀 Count-up open flowmodoro')
-                              : (isDraftFa ? `${toPersianDigits(settingsPresetMinutes)} دقیقه` : `${settingsPresetMinutes} mins`)}
-                          </span>
-                        </div>
-                      </div>
+                      <button
+                        type="submit"
+                        disabled={testingPrompt || !testPromptInput.trim()}
+                        className="w-full sm:w-auto min-h-[40px] px-4 py-2.5 rounded-xl bg-[#80D141] hover:bg-[#72BF36] disabled:opacity-40 text-[#0F2600] text-xs font-bold shadow-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer shrink-0"
+                      >
+                        {testingPrompt ? (
+                          <>
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            <span>{t('settings.testingPrompt', 'Sending Query...')}</span>
+                          </>
+                        ) : (
+                          <>
+                            <Send className="w-3.5 h-3.5 stroke-[2.5] rtl:rotate-180" />
+                            <span>{t('settings.sendTestPrompt', 'Send Test Query')}</span>
+                          </>
+                        )}
+                      </button>
+                    </form>
 
-                      <div>
-                        <label className="block text-xs font-bold text-[#151E14] dark:text-[#E8F2E4] mb-1">
-                          {t('focus.presetIcon', 'Emoji Icon')}
-                        </label>
-                        <div className="flex items-center gap-2 mb-2">
-                          <input
-                            type="text"
-                            value={settingsPresetIcon}
-                            onChange={(e) => setSettingsPresetIcon(e.target.value)}
-                            maxLength={4}
-                            className="w-14 h-10 rounded-xl bg-[#F7FAF4] dark:bg-[#22301F] border border-[#DCEAD4] dark:border-[#2E402B] text-lg text-center focus:outline-none focus:ring-2 focus:ring-[#80D141]"
-                          />
-                          <span className="text-[11px] text-[#485B44] dark:text-[#9EB598]">
-                            {isDraftFa ? 'پیشنهادی:' : 'Suggestions:'}
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          {['⚡', '🎯', '🍅', '🌊', '🚀', '⏱️', '🧘', '☕', '💡', '🔥', '🏆', '🧠', '📚', '💻', '🌿', '✨'].map((emoji) => (
+                    {/* Model Response Container */}
+                    <div className="space-y-1.5 pt-1">
+                      <div className="flex items-center justify-between text-xs font-bold text-[#151E14] dark:text-[#E8F2E4] flex-wrap gap-1.5">
+                        <span className="flex items-center gap-1.5">
+                          <MessageSquare className="w-3.5 h-3.5 text-[#80D141]" />
+                          <span>{t('settings.testResponseLabel', 'Model Response')}</span>
+                        </span>
+
+                        {promptTestResult && (
+                          <div className="flex items-center gap-3 text-[11px] font-medium text-[#485B44] dark:text-[#9EB598]">
+                            {promptTestResult.latencyMs > 0 && (
+                              <span className="font-mono tabular-nums">{promptTestResult.latencyMs}ms</span>
+                            )}
+
+                            {promptTestResult.response && (
+                              <button
+                                type="button"
+                                onClick={handleCopyTestResponse}
+                                className="hover:text-[#151E14] dark:hover:text-[#E8F2E4] flex items-center gap-1 cursor-pointer"
+                              >
+                                {copiedResponse ? (
+                                  <>
+                                    <Check className="w-3.5 h-3.5 text-emerald-600" />
+                                    <span className="text-emerald-600 dark:text-emerald-400 font-bold">
+                                      {t('settings.copiedResponse', 'Copied!')}
+                                    </span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Copy className="w-3.5 h-3.5" />
+                                    <span>{t('settings.copyResponse', 'Copy')}</span>
+                                  </>
+                                )}
+                              </button>
+                            )}
+
                             <button
-                              key={emoji}
                               type="button"
                               onClick={() => {
-                                soundEngine.playPop();
-                                setSettingsPresetIcon(emoji);
+                                setPromptTestResult(null);
+                                setTestPromptInput('');
                               }}
-                              className={`w-7 h-7 rounded-lg text-sm flex items-center justify-center transition-all cursor-pointer ${
-                                settingsPresetIcon === emoji
-                                  ? 'bg-[#80D141] scale-110 shadow-xs'
-                                  : 'bg-[#F7FAF4] dark:bg-[#22301F] hover:bg-[#E8F8D8] dark:hover:bg-[#2A3E26]'
-                              }`}
+                              className="text-[#79747E] hover:text-[#B3261E] dark:hover:text-[#F2B8B5] transition-colors cursor-pointer"
                             >
-                              {emoji}
+                              {t('settings.clearResponse', 'Clear')}
                             </button>
-                          ))}
-                        </div>
+                          </div>
+                        )}
                       </div>
 
-                      <div>
-                        <label className="block text-xs font-bold text-[#151E14] dark:text-[#E8F2E4] mb-1">
-                          {t('focus.presetDesc', 'Description (Optional)')}
-                        </label>
-                        <input
-                          type="text"
-                          value={settingsPresetDesc}
-                          onChange={(e) => setSettingsPresetDesc(e.target.value)}
-                          placeholder={t('focus.presetDescPlaceholder', 'e.g. 60 min sustained deep flow')}
-                          className="w-full px-3.5 py-2.5 rounded-xl bg-[#F7FAF4] dark:bg-[#22301F] border border-[#DCEAD4] dark:border-[#2E402B] text-xs text-[#151E14] dark:text-[#E8F2E4] focus:outline-none focus:ring-2 focus:ring-[#80D141]"
-                        />
+                      <div
+                        id="api-test-output-box"
+                        className={`p-3.5 rounded-xl border text-xs leading-relaxed transition-colors min-h-[72px] flex flex-col justify-center ${
+                          testingPrompt
+                            ? 'bg-white dark:bg-[#202E1D] border-[#80D141]/50 text-[#485B44] dark:text-[#9EB598]'
+                            : promptTestResult?.success
+                            ? 'bg-white dark:bg-[#1E2D1B] border-[#80D141]/50 text-[#151E14] dark:text-[#E8F2E4] shadow-2xs'
+                            : promptTestResult?.error
+                            ? 'bg-red-50/70 dark:bg-red-950/40 border-red-200 dark:border-red-900/50 text-red-900 dark:text-red-300'
+                            : 'bg-white/60 dark:bg-[#202E1D]/50 border-dashed border-[#DCEAD4] dark:border-[#2C3E27] text-[#79747E] dark:text-[#8D9E8A]'
+                        }`}
+                      >
+                        {testingPrompt ? (
+                          <div className="flex items-center gap-2 text-xs font-medium text-[#3B4E37] dark:text-[#A7C59E]">
+                            <Loader2 className="w-4 h-4 animate-spin text-[#80D141]" />
+                            <span>
+                              {isDraftFa
+                                ? `در حال ارسال پرسش به ${selectedProvider === 'openrouter' ? 'OpenRouter' : 'Google Gemini'}...`
+                                : `Querying ${selectedProvider === 'openrouter' ? 'OpenRouter' : 'Google Gemini'} (${
+                                    selectedProvider === 'openrouter'
+                                      ? openRouterModelInput || DEFAULT_OPENROUTER_MODEL
+                                      : geminiModelInput || DEFAULT_GEMINI_MODEL
+                                  })...`}
+                            </span>
+                          </div>
+                        ) : promptTestResult?.success ? (
+                          <div className="space-y-1.5">
+                            <div className="flex items-center gap-1.5 text-[11px] font-bold text-emerald-700 dark:text-emerald-400">
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                              <span>{promptTestResult.model}</span>
+                              <span className="text-[#79747E] dark:text-[#8D9E8A] font-normal font-mono tabular-nums">
+                                · {promptTestResult.timestamp}
+                              </span>
+                            </div>
+                            <div className="whitespace-pre-wrap font-sans text-xs text-[#151E14] dark:text-[#E8F2E4] selection:bg-[#80D141]/30">
+                              {promptTestResult.response}
+                            </div>
+                          </div>
+                        ) : promptTestResult?.error ? (
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-1.5 text-[11px] font-bold text-red-700 dark:text-red-400">
+                              <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                              <span>{isDraftFa ? 'خطا در اجرای پرسش' : 'Query Failed'}</span>
+                            </div>
+                            <p className="text-xs text-red-800 dark:text-red-300">{promptTestResult.error}</p>
+                          </div>
+                        ) : (
+                          <div className="text-[11px] text-[#79747E] dark:text-[#8D9E8A] italic">
+                            {t('settings.noResponseYet', 'Type a prompt above or pick a quick example to test your API key response.')}
+                          </div>
+                        )}
                       </div>
 
-                      <div className="flex items-center justify-end gap-2 pt-3 border-t border-[#DCEAD4] dark:border-[#263722]">
-                        <button
-                          type="button"
-                          onClick={() => setShowSettingsPresetModal(false)}
-                          className="px-4 py-2 rounded-xl text-xs font-bold text-[#485B44] dark:text-[#9EB598] hover:bg-[#EDF6E8] dark:hover:bg-[#253522] transition-colors cursor-pointer"
-                        >
-                          {isDraftFa ? 'انصراف' : 'Cancel'}
-                        </button>
-                        <button
-                          type="submit"
-                          className="px-5 py-2 rounded-xl bg-[#80D141] hover:bg-[#72BF36] text-[#0F2600] text-xs font-bold shadow-xs transition-all flex items-center gap-1.5 cursor-pointer"
-                        >
-                          <Check className="w-3.5 h-3.5 stroke-[2.5]" />
-                          <span>{isDraftFa ? 'ذخیره پیش‌تنظیم' : 'Save Preset'}</span>
-                        </button>
-                      </div>
-                    </form>
-                  </motion.div>
-                </div>
-              )}
-            </AnimatePresence>
-          </section>
-
-          {/* Feature 2: Journal Categories Customization (Expandable) */}
-          <section id="section-settings-categories" className="rounded-[28px] bg-white dark:bg-[#182316] border border-[#D8E8D0] dark:border-[#22301F] shadow-sm transition-all duration-200 overflow-hidden">
-            <div
-              role="button"
-              tabIndex={0}
-              onClick={() => toggleSection('categories')}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault();
-                  toggleSection('categories');
-                }
-              }}
-              aria-expanded={expandedSections['categories']}
-              className="w-full p-4 sm:p-5 flex items-center justify-between text-start gap-3 hover:bg-[#F9FAF6] dark:hover:bg-[#1C2819] transition-colors cursor-pointer group"
-            >
-              <div className="flex items-center gap-3 min-w-0">
-                <div className="w-9 h-9 rounded-xl bg-[#E8F8D8] dark:bg-[#1E3800] border border-[#80D141]/50 flex items-center justify-center text-[#234A00] dark:text-[#80D141] shrink-0 group-hover:scale-105 transition-transform">
-                  <Tag className="w-4 h-4" />
-                </div>
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <h3 className="font-display text-sm sm:text-base font-bold text-[#151E14] dark:text-[#E8F2E4]">
-                      {t('settings.categoriesSection', 'Journal & Task Categories')}
-                    </h3>
-                    <span className="text-[11px] font-semibold text-[#3B7E10] dark:text-[#80D141] px-2 py-0.5 rounded-full bg-[#E8F8D8] dark:bg-[#1E3800] border border-[#80D141]/30">
-                      {isDraftFa ? `${currentCategories.length} برچسب` : `${currentCategories.length} tags`}
-                    </span>
+                      <p className="text-[11px] text-[#556950] dark:text-[#8DA589] pt-0.5">
+                        {t(
+                          'settings.isolatedContextHint',
+                          'All queries are completely independent single-turn calls (zero conversation context or history retained).'
+                        )}
+                      </p>
+                    </div>
                   </div>
-                  <p className="text-xs text-[#485B44] dark:text-[#9EB598] truncate">
-                    {t('settings.categoriesDesc', 'Personalize categorization tags for your notes and tasks')}
-                  </p>
                 </div>
-              </div>
 
-              <div className="flex items-center gap-2 shrink-0">
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleResetCategories();
-                  }}
-                  className="px-2.5 py-1 rounded-full text-xs font-bold text-[#3B7E10] dark:text-[#80D141] bg-[#EDF6E8] dark:bg-[#1E2B1A] hover:bg-[#E2F2D9] dark:hover:bg-[#283A23] border border-[#D8E8D0] dark:border-[#273722] flex items-center gap-1 transition-colors cursor-pointer"
-                  title="Reset to default tags"
+                {/* Smart Planner Custom Instructions */}
+                <div
+                  id="section-settings-planner-instructions"
+                  className="pt-6 border-t border-[#DCEAD4]/75 dark:border-[#263722] space-y-3"
                 >
-                  <RotateCcw className="w-3 h-3" />
-                  <span className="hidden sm:inline">{t('common.reset', 'Reset')}</span>
-                </button>
-                <div className="w-8 h-8 rounded-full flex items-center justify-center text-[#485B44] dark:text-[#9EB598] group-hover:text-[#151E14] dark:group-hover:text-[#E8F2E4] group-hover:bg-[#EDF6E8] dark:group-hover:bg-[#202E1E] transition-colors">
-                  <ChevronDown className={`w-4 h-4 transition-transform duration-200 ${expandedSections['categories'] ? 'rotate-180' : ''}`} />
-                </div>
-              </div>
-            </div>
+                  <div>
+                    <h4 className="text-sm font-bold text-[#151E14] dark:text-[#E8F2E4]">
+                      {t('settings.plannerInstructionsSection', 'Smart Planner Custom Instructions')}
+                    </h4>
+                    <p className="text-xs text-[#485B44] dark:text-[#9EB598] mt-0.5">
+                      {t('settings.plannerInstructionsDesc', 'Persistent rules & preferences for how AI structures your daily schedules')}
+                    </p>
+                  </div>
 
-            <AnimatePresence initial={false}>
-              {expandedSections['categories'] && (
-                <motion.div
-                  initial={{ height: 0, opacity: 0 }}
-                  animate={{ height: 'auto', opacity: 1 }}
-                  exit={{ height: 0, opacity: 0 }}
-                  transition={{ duration: 0.22, ease: 'easeInOut' }}
-                >
-                  <div className="px-5 pb-5 sm:px-6 sm:pb-6 pt-2 border-t border-[#DCEAD4]/80 dark:border-[#263722] space-y-4">
-                    {/* Category Chips */}
-                    <div className="flex flex-wrap gap-2 pt-1">
-                      {currentCategories.map((cat) => (
-                        <div
-                          key={cat}
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#F7FAF4] dark:bg-[#1C2919] border border-[#DCEAD4] dark:border-[#2A3E26] text-xs font-bold text-[#151E14] dark:text-[#E8F2E4] shadow-2xs group"
+                  <form onSubmit={handleSavePlannerInstructions} className="space-y-3">
+                    <textarea
+                      value={plannerInstructionsInput}
+                      onChange={(e) => setPlannerInstructionsInput(e.target.value)}
+                      placeholder={t(
+                        'settings.plannerInstructionsPlaceholder',
+                        'e.g., Never schedule deep work after 4 PM; Always add 15min rest after meetings; Group errands together in the morning...'
+                      )}
+                      rows={4}
+                      className="w-full p-3.5 rounded-2xl bg-[#F7FAF4] dark:bg-[#1C2919] border border-[#DCEAD4] dark:border-[#2A3E26] text-xs text-[#151E14] dark:text-[#E8F2E4] placeholder:text-[#79747E] dark:placeholder:text-[#7D917A] focus:outline-none focus:ring-2 focus:ring-[#80D141] resize-none transition-all leading-relaxed"
+                    />
+
+                    <div className="flex flex-wrap gap-1.5 items-center">
+                      <span className="text-[11px] font-semibold text-[#485B44] dark:text-[#9EB598]">
+                        {isDraftFa ? 'پیشنهادهای سریع:' : 'Quick ideas:'}
+                      </span>
+                      {[
+                        isDraftFa ? 'بعد از ساعت ۵ عصر کار سنگین نگذار' : 'No heavy work after 5 PM',
+                        isDraftFa ? 'بعد از هر کار فکری ۱۰ دقیقه استراحت بده' : '10min buffer between focus blocks',
+                        isDraftFa ? 'کارهای حرکتی را اول صبح قرار بده' : 'Put physical tasks in morning',
+                      ].map((idea) => (
+                        <button
+                          key={idea}
+                          type="button"
+                          onClick={() => {
+                            soundEngine.playPop();
+                            setPlannerInstructionsInput((prev) => {
+                              const trimmed = prev.trim();
+                              return trimmed ? `${trimmed}\n${idea}` : idea;
+                            });
+                          }}
+                          className="text-[11px] px-2.5 py-1 rounded-lg bg-[#EDF6E8] dark:bg-[#1E2B1A] hover:bg-[#E2F2D9] text-[#2F6B12] dark:text-[#9DD97A] border border-[#DCEAD4] dark:border-[#2C4027] font-medium transition-colors cursor-pointer"
                         >
-                          <span>{getCategoryLabel(cat, language)}</span>
-                          <button
-                            type="button"
-                            onClick={() => handleRemoveCategory(cat)}
-                            disabled={currentCategories.length <= 1}
-                            className="p-0.5 rounded-full hover:bg-[#FFEAEA] dark:hover:bg-[#3E1C18] text-[#79747E] hover:text-[#B3261E] dark:hover:text-[#F2B8B5] disabled:opacity-30 disabled:hover:bg-transparent transition-colors cursor-pointer"
-                            title={`Remove ${cat}`}
-                          >
-                            <X className="w-3 h-3" />
-                          </button>
-                        </div>
+                          {idea}
+                        </button>
                       ))}
                     </div>
 
-                    {/* Add Category Input */}
-                    <form onSubmit={handleAddCategory} className="flex gap-2 pt-1">
-                      <input
-                        type="text"
-                        value={newCatInput}
-                        onChange={(e) => {
-                          setNewCatInput(e.target.value);
-                          if (catError) setCatError(null);
-                        }}
-                        maxLength={20}
-                        placeholder={t('settings.categoryPlaceholder', 'Add new category (e.g. Creative, Finance)...')}
-                        className="flex-1 px-3.5 py-2.5 rounded-xl bg-[#F7FAF4] dark:bg-[#1C2919] border border-[#DCEAD4] dark:border-[#2A3E26] text-xs text-[#151E14] dark:text-[#E8F2E4] focus:outline-none focus:ring-2 focus:ring-[#80D141]"
-                      />
-                      <button
-                        type="submit"
-                        disabled={!newCatInput.trim()}
-                        className="px-4 py-2.5 rounded-xl bg-[#80D141] hover:bg-[#72BF36] disabled:opacity-40 text-[#0F2600] text-xs font-bold shadow-xs flex items-center gap-1.5 transition-all shrink-0"
-                      >
-                        <Plus className="w-4 h-4 stroke-[2.5]" />
-                        <span>{t('settings.addCategory', 'Add Tag')}</span>
-                      </button>
-                    </form>
+                    <div className="flex items-center justify-between pt-1 flex-wrap gap-2">
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="submit"
+                          disabled={plannerInstructionsInput.trim() === (draftPrefs.plannerCustomInstructions || '')}
+                          className="min-h-[40px] px-4 py-2 rounded-xl bg-[#80D141] hover:bg-[#72BF36] disabled:opacity-40 text-[#0F2600] text-xs font-bold shadow-xs transition-all flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <Save className="w-3.5 h-3.5" />
+                          <span>{t('settings.saveInstructions', 'Save Instructions')}</span>
+                        </button>
 
-                    {catError && (
-                      <p className="text-[11px] font-semibold text-[#B3261E] dark:text-[#F2B8B5]">
-                        {catError}
+                        {(plannerInstructionsInput || draftPrefs.plannerCustomInstructions) && (
+                          <button
+                            type="button"
+                            onClick={handleClearPlannerInstructions}
+                            className="min-h-[40px] px-3 py-2 rounded-xl bg-white dark:bg-[#22301F] text-[#B3261E] dark:text-[#F2B8B5] hover:bg-[#FFEAEA] dark:hover:bg-[#3B1C1A] text-xs font-bold border border-[#DCEAD4] dark:border-[#33482E] transition-all cursor-pointer"
+                          >
+                            {isDraftFa ? 'پاک کردن' : 'Clear'}
+                          </button>
+                        )}
+                      </div>
+
+                      <span className="text-[11px] text-[#485B44] dark:text-[#9EB598]">
+                        {isDraftFa ? 'در تمام برنامه‌ریزی‌های هوشمند اعمال می‌شود' : 'Applied across all AI schedules'}
+                      </span>
+                    </div>
+                  </form>
+
+                  <AnimatePresence>
+                    {instructionsSavedMessage && (
+                      <motion.div
+                        initial={{ opacity: 0, y: -6 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -6 }}
+                        className="p-2.5 rounded-xl bg-[#E8F8D8] dark:bg-[#1E3800] border border-[#80D141]/50 text-xs font-bold text-[#1C3700] dark:text-[#80D141] flex items-center gap-2"
+                      >
+                        <CheckCircle2 className="w-4 h-4 shrink-0" />
+                        <span>{instructionsSavedMessage}</span>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+              </div>
+            )}
+
+            {/* ==============================================================
+                CATEGORY 3: FOCUS & NAVIGATION
+               ============================================================== */}
+            {activeCategory === 'workflow' && (
+              <div className="space-y-7">
+                {/* Navigation Section Order */}
+                <div id="section-settings-navigation" className="space-y-3">
+                  <div className="flex items-center justify-between gap-3 flex-wrap">
+                    <div>
+                      <h4 className="text-sm font-bold text-[#151E14] dark:text-[#E8F2E4]">
+                        {t('settings.navOrderSection', 'Navigation Section Order')}
+                      </h4>
+                      <p className="text-xs text-[#485B44] dark:text-[#9EB598] mt-0.5">
+                        {t('settings.navOrderDesc', 'Reorder tabs in the navigation bar')}
                       </p>
-                    )}
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </section>
-
-          {/* Audio & Sensory Feedback (Expandable) */}
-          <section id="section-settings-audio" className="rounded-[28px] bg-white dark:bg-[#182316] border border-[#D8E8D0] dark:border-[#22301F] shadow-sm transition-all duration-200 overflow-hidden">
-            <div
-              role="button"
-              tabIndex={0}
-              onClick={() => toggleSection('audio')}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault();
-                  toggleSection('audio');
-                }
-              }}
-              aria-expanded={expandedSections['audio']}
-              className="w-full p-4 sm:p-5 flex items-center justify-between text-start gap-3 hover:bg-[#F9FAF6] dark:hover:bg-[#1C2819] transition-colors cursor-pointer group"
-            >
-              <div className="flex items-center gap-3 min-w-0">
-                <div className="w-9 h-9 rounded-xl bg-[#E8F8D8] dark:bg-[#1E3800] border border-[#80D141]/50 flex items-center justify-center text-[#234A00] dark:text-[#80D141] shrink-0 group-hover:scale-105 transition-transform">
-                  {(draftPrefs.soundEffectsEnabled ?? true) ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
-                </div>
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <h3 className="font-display text-sm sm:text-base font-bold text-[#151E14] dark:text-[#E8F2E4]">
-                      {t('settings.audioSection', 'Audio & Sensory Cues')}
-                    </h3>
-                    <span className="text-[11px] font-semibold text-[#3B7E10] dark:text-[#80D141] px-2 py-0.5 rounded-full bg-[#E8F8D8] dark:bg-[#1E3800] border border-[#80D141]/30">
-                      {(draftPrefs.soundEffectsEnabled ?? true) ? (isDraftFa ? 'صدا فعال' : 'Sound On') : (isDraftFa ? 'بی‌صدا' : 'Muted')}
-                    </span>
-                  </div>
-                  <p className="text-xs text-[#485B44] dark:text-[#9EB598] truncate">
-                    {t('settings.audioDesc', 'Haptic audio clicks & completion chimes')}
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2 shrink-0">
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    soundEngine.playGentleChime();
-                  }}
-                  className="px-2.5 py-1 rounded-full bg-[#EDF6E8] dark:bg-[#1E2B1A] hover:bg-[#E2F2D9] text-[11px] font-bold text-[#3B4E37] dark:text-[#B6CCB0] border border-[#D8E8D0] dark:border-[#273722] flex items-center gap-1 cursor-pointer"
-                  title="Play test chime"
-                >
-                  <Volume1 className="w-3.5 h-3.5" />
-                  <span>{t('common.test', 'Test')}</span>
-                </button>
-                <div className="w-8 h-8 rounded-full flex items-center justify-center text-[#485B44] dark:text-[#9EB598] group-hover:text-[#151E14] dark:group-hover:text-[#E8F2E4] group-hover:bg-[#EDF6E8] dark:group-hover:bg-[#202E1E] transition-colors">
-                  <ChevronDown className={`w-4 h-4 transition-transform duration-200 ${expandedSections['audio'] ? 'rotate-180' : ''}`} />
-                </div>
-              </div>
-            </div>
-
-            <AnimatePresence initial={false}>
-              {expandedSections['audio'] && (
-                <motion.div
-                  initial={{ height: 0, opacity: 0 }}
-                  animate={{ height: 'auto', opacity: 1 }}
-                  exit={{ height: 0, opacity: 0 }}
-                  transition={{ duration: 0.22, ease: 'easeInOut' }}
-                >
-                  <div className="px-5 pb-5 sm:px-6 sm:pb-6 pt-2 border-t border-[#DCEAD4]/80 dark:border-[#263722] space-y-4">
-                    {/* Master UI Sounds */}
-                    <div className="flex items-center justify-between p-3.5 rounded-2xl bg-[#F7FAF4] dark:bg-[#1C2919] border border-[#DCEAD4] dark:border-[#2A3E26]">
-                      <div className="text-xs">
-                        <div className="font-bold text-[#151E14] dark:text-[#E8F2E4]">{t('settings.uiSounds', 'UI Sound Effects')}</div>
-                        <div className="text-[#485B44] dark:text-[#9EB598] text-[11px]">{t('settings.uiSoundsSub', 'Subtle pops, navigation taps, and feedback')}</div>
-                      </div>
-                      <label className="relative inline-flex items-center cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={draftPrefs.soundEffectsEnabled ?? true}
-                          onChange={(e) => {
-                            const isEnabled = e.target.checked;
-                            setDraftPrefs((prev) => ({ ...prev, soundEffectsEnabled: isEnabled }));
-                            if (isEnabled) {
-                              soundEngine.playPop();
-                            }
-                          }}
-                          className="sr-only peer"
-                        />
-                        <div className="w-9 h-5 bg-gray-300 dark:bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] rtl:after:left-auto rtl:after:right-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#80D141]"></div>
-                      </label>
                     </div>
 
-                    {/* Harmonic Completion Chime */}
-                    <div className={`flex items-center justify-between p-3.5 rounded-2xl bg-[#F7FAF4] dark:bg-[#1C2919] border border-[#DCEAD4] dark:border-[#2A3E26] transition-opacity ${
-                      !(draftPrefs.soundEffectsEnabled ?? true) ? 'opacity-50 pointer-events-none' : ''
-                    }`}>
-                      <div className="text-xs">
-                        <div className="font-bold text-[#151E14] dark:text-[#E8F2E4]">{t('settings.taskChimes', 'Task Completion Chimes')}</div>
-                        <div className="text-[#485B44] dark:text-[#9EB598] text-[11px]">{t('settings.taskChimesSub', 'Gentle arpeggio on task done & timer finish')}</div>
-                      </div>
-                      <label className="relative inline-flex items-center cursor-pointer">
-                        <input
-                          type="checkbox"
-                          disabled={!(draftPrefs.soundEffectsEnabled ?? true)}
-                          checked={(draftPrefs.soundAlerts ?? true) && (draftPrefs.soundEffectsEnabled ?? true)}
-                          onChange={(e) => {
-                            const isAlerts = e.target.checked;
-                            setDraftPrefs((prev) => ({ ...prev, soundAlerts: isAlerts }));
-                            if (isAlerts && (draftPrefs.soundEffectsEnabled ?? true)) {
-                              soundEngine.playGentleChime();
-                            }
-                          }}
-                          className="sr-only peer"
-                        />
-                        <div className="w-9 h-5 bg-gray-300 dark:bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] rtl:after:left-auto rtl:after:right-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#80D141]"></div>
-                      </label>
-                    </div>
+                    <button
+                      type="button"
+                      onClick={handleResetNavOrder}
+                      className="min-h-[36px] px-3 py-1.5 rounded-xl text-xs font-bold text-[#3B7E10] dark:text-[#80D141] bg-[#EDF6E8] dark:bg-[#1E2B1A] hover:bg-[#E2F2D9] dark:hover:bg-[#283A23] border border-[#D8E8D0] dark:border-[#273722] flex items-center gap-1.5 transition-colors cursor-pointer"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                      <span>{t('settings.resetNavOrder', 'Reset Order')}</span>
+                    </button>
                   </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </section>
 
-          {/* Feature: Reminders & Notifications (Expandable) */}
-          <section id="section-settings-reminders" className="rounded-[28px] bg-white dark:bg-[#182316] border border-[#D8E8D0] dark:border-[#22301F] shadow-sm transition-all duration-200 overflow-hidden">
-            <div
-              role="button"
-              tabIndex={0}
-              onClick={() => toggleSection('reminders')}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault();
-                  toggleSection('reminders');
-                }
-              }}
-              aria-expanded={expandedSections['reminders']}
-              className="w-full p-4 sm:p-5 flex items-center justify-between text-start gap-3 hover:bg-[#F9FAF6] dark:hover:bg-[#1C2819] transition-colors cursor-pointer group"
-            >
-              <div className="flex items-center gap-3 min-w-0">
-                <div className="w-9 h-9 rounded-xl bg-[#E8F8D8] dark:bg-[#1E3800] border border-[#80D141]/50 flex items-center justify-center text-[#234A00] dark:text-[#80D141] shrink-0 group-hover:scale-105 transition-transform">
-                  <Bell className="w-4 h-4" />
-                </div>
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <h3 className="font-display text-sm sm:text-base font-bold text-[#151E14] dark:text-[#E8F2E4]">
-                      {t('settings.remindersSection', 'Reminders & Notifications')}
-                    </h3>
-                    {notifPermission === 'granted' && (
-                      <span className="text-[11px] font-semibold text-[#1C3700] dark:text-[#80D141] px-2 py-0.5 rounded-full bg-[#E8F8D8] dark:bg-[#1E3800] border border-[#80D141]/30">
-                        {isDraftFa ? 'مجاز' : 'Granted'}
-                      </span>
-                    )}
-                    {notifPermission === 'denied' && (
-                      <span className="text-[11px] font-semibold text-red-700 dark:text-red-300 px-2 py-0.5 rounded-full bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/40">
-                        {isDraftFa ? 'مسدود' : 'Blocked'}
-                      </span>
-                    )}
-                    {(notifPermission === 'default' || notifPermission === 'unsupported') && (
-                      <span className="text-[11px] font-semibold text-amber-700 dark:text-amber-300 px-2 py-0.5 rounded-full bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/40">
-                        {isDraftFa ? 'نیاز به دسترسی' : 'Setup Needed'}
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-xs text-[#485B44] dark:text-[#9EB598] truncate">
-                    {t('settings.remindersDesc', 'Configure alarms, sound alerts, and scheduled reminder times')}
-                  </p>
-                </div>
-              </div>
+                  <div className="space-y-2">
+                    {currentNavOrder.map((secId, index) => {
+                      const icon = SECTION_ICONS[secId];
+                      const label = t(`nav.${secId}`, secId);
+                      const isFirst = index === 0;
+                      const isLast = index === currentNavOrder.length - 1;
 
-              <div className="flex items-center gap-2 shrink-0">
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleTestNotification();
-                  }}
-                  disabled={isTestingNotif}
-                  className="px-2.5 py-1 rounded-full bg-[#EDF6E8] dark:bg-[#1E2B1A] hover:bg-[#E2F2D9] text-[11px] font-bold text-[#3B4E37] dark:text-[#B6CCB0] border border-[#D8E8D0] dark:border-[#273722] flex items-center gap-1 cursor-pointer transition-colors"
-                  title="Trigger sample notification"
-                >
-                  <Bell className="w-3.5 h-3.5" />
-                  <span>{isTestingNotif ? (isDraftFa ? '...' : '...') : t('common.test', 'Test')}</span>
-                </button>
-                <div className="w-8 h-8 rounded-full flex items-center justify-center text-[#485B44] dark:text-[#9EB598] group-hover:text-[#151E14] dark:group-hover:text-[#E8F2E4] group-hover:bg-[#EDF6E8] dark:group-hover:bg-[#202E1E] transition-colors">
-                  <ChevronDown className={`w-4 h-4 transition-transform duration-200 ${expandedSections['reminders'] ? 'rotate-180' : ''}`} />
-                </div>
-              </div>
-            </div>
-
-            <AnimatePresence initial={false}>
-              {expandedSections['reminders'] && (
-                <motion.div
-                  initial={{ height: 0, opacity: 0 }}
-                  animate={{ height: 'auto', opacity: 1 }}
-                  exit={{ height: 0, opacity: 0 }}
-                  transition={{ duration: 0.22, ease: 'easeInOut' }}
-                >
-                  <div className="px-5 pb-5 sm:px-6 sm:pb-6 pt-2 border-t border-[#DCEAD4]/80 dark:border-[#263722] space-y-4">
-                    {/* System Permission & Test Triggers Card */}
-                    <div className="p-3.5 rounded-2xl bg-[#F7FAF4] dark:bg-[#1C2919] border border-[#DCEAD4] dark:border-[#2A3E26] space-y-3">
-                      <div className="flex items-start justify-between gap-3 flex-wrap">
-                        <div className="text-xs">
-                          <div className="font-bold text-[#151E14] dark:text-[#E8F2E4]">
-                            {t('settings.systemNotifications', 'Desktop & Mobile System Notifications')}
-                          </div>
-                          <div className="text-[#485B44] dark:text-[#9EB598] text-[11px] mt-0.5 leading-relaxed">
-                            {notifPermission === 'granted'
-                              ? t('settings.notificationsGranted', 'Notifications are active and will appear when reminders are due.')
-                              : notifPermission === 'denied'
-                              ? t('settings.notificationsBlocked', 'Notifications are blocked in your browser settings. Please allow notifications for this site.')
-                              : t('settings.notificationsPrompt', 'Allow notifications to receive reminder alerts even when the tab is backgrounded.')}
-                          </div>
-                        </div>
-
-                        {notifPermission !== 'granted' && notifPermission !== 'unsupported' && (
-                          <button
-                            type="button"
-                            onClick={handleRequestNotificationPermission}
-                            className="px-3 py-1.5 rounded-xl bg-[#80D141] hover:bg-[#72BF36] text-[#0F2600] text-xs font-bold shadow-xs flex items-center gap-1.5 transition-transform active:scale-95 shrink-0 cursor-pointer"
-                          >
-                            <Bell className="w-3.5 h-3.5 stroke-[2.5]" />
-                            <span>{t('settings.enableNotifications', 'Enable Alerts')}</span>
-                          </button>
-                        )}
-                      </div>
-
-                      {/* Interactive Test Triggers for Normal and Strong Intensity */}
-                      <div className="pt-2 border-t border-[#DCEAD4]/70 dark:border-[#263722]/70 flex flex-wrap items-center gap-2">
-                        <span className="text-[11px] font-bold text-[#485B44] dark:text-[#9EB598]">
-                          {isDraftFa ? 'آزمایش یادآور:' : 'Test Alarm:'}
-                        </span>
-
-                        <button
-                          type="button"
-                          onClick={() => handleTestNotification('normal')}
-                          disabled={isTestingNotif}
-                          className="px-3 py-1.5 rounded-xl bg-white dark:bg-[#202E1E] hover:bg-[#E8F8D8] dark:hover:bg-[#2A3E26] text-[#1E4300] dark:text-[#A2EB68] text-xs font-bold border border-[#DCEAD4] dark:border-[#2C4027] flex items-center gap-1.5 transition-all shadow-2xs cursor-pointer active:scale-95"
-                          title="Trigger a single gentle reminder chime & notification"
+                      return (
+                        <motion.div
+                          key={secId}
+                          layout
+                          transition={{ type: 'spring', stiffness: 500, damping: 35 }}
+                          className="flex items-center justify-between p-3 sm:p-3.5 rounded-2xl bg-[#F7FAF4] dark:bg-[#1C2919] border border-[#DCEAD4] dark:border-[#2A3E26] hover:border-[#80D141]/60 transition-colors"
                         >
-                          <Bell className="w-3.5 h-3.5" />
-                          <span>{t('reminders.testNormal', 'Test Normal Reminder')}</span>
-                        </button>
+                          <div className="flex items-center gap-3 min-w-0">
+                            <span className="w-6 h-6 rounded-full bg-white dark:bg-[#263722] border border-[#DCEAD4] dark:border-[#344D2F] flex items-center justify-center text-xs font-bold tabular-nums text-[#485B44] dark:text-[#9EB598] shrink-0">
+                              {isDraftFa ? (index + 1).toLocaleString('fa-IR') : index + 1}
+                            </span>
 
-                        <button
-                          type="button"
-                          onClick={() => handleTestNotification('strong')}
-                          disabled={isTestingNotif}
-                          className="px-3 py-1.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 dark:hover:bg-rose-900/50 text-rose-700 dark:text-rose-300 text-xs font-bold border border-rose-200 dark:border-rose-900/60 flex items-center gap-1.5 transition-all shadow-2xs cursor-pointer active:scale-95"
-                          title="Trigger urgent pulses that repeat every 3s until dismissed or snoozed"
-                        >
-                          <span className="relative flex h-2 w-2">
-                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
-                            <span className="relative inline-flex rounded-full h-2 w-2 bg-rose-500"></span>
-                          </span>
-                          <span>{t('reminders.testStrong', 'Test Strong (3s Repeat)')}</span>
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => handleScheduleClosedAppTest('strong')}
-                          disabled={isTestingNotif}
-                          className="px-3 py-1.5 rounded-xl bg-[#EDF6E8] dark:bg-[#1E2B1A] hover:bg-[#DDF4CD] text-[#245209] dark:text-[#80D141] text-xs font-bold border border-[#DCEAD4] dark:border-[#263722] flex items-center gap-1.5 transition-all shadow-2xs cursor-pointer active:scale-95"
-                          title="Schedule notification in 6 seconds to verify background delivery"
-                        >
-                          <Smartphone className="w-3.5 h-3.5" />
-                          <span>{isDraftFa ? 'آزمایش در پس‌زمینه (۶ ثانیه بعد)' : 'Test Background (6s)'}</span>
-                        </button>
-
-                        {activeStrongTest && (
-                          <button
-                            type="button"
-                            onClick={handleStopStrongTest}
-                            className="px-3 py-1.5 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-bold flex items-center gap-1.5 transition-all shadow-xs cursor-pointer active:scale-95 animate-pulse"
-                            title="Stop active 3-second test alarm loop"
-                          >
-                            <VolumeX className="w-3.5 h-3.5" />
-                            <span>{t('reminders.stopTestStrong', 'Stop Test Alarm')}</span>
-                          </button>
-                        )}
-                      </div>
-
-                      {testNotifMessage && (
-                        <div className="p-2.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-300 dark:border-emerald-800 text-xs font-bold text-emerald-800 dark:text-emerald-300 flex items-center gap-2">
-                          <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
-                          <span>{testNotifMessage}</span>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Educational Guide: Reminder Urgency & Background Execution */}
-                    <div className="p-3.5 rounded-2xl bg-amber-50/70 dark:bg-amber-950/25 border border-amber-200/80 dark:border-amber-900/40 text-xs space-y-2">
-                      <div className="font-bold text-amber-900 dark:text-amber-200 flex items-center gap-1.5">
-                        <Zap className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
-                        <span>{isDraftFa ? 'آشنایی با نحوه کارکرد یادآورها و اجرای بدون سرور (GitHub Pages)' : 'Reminder Urgency Modes & Frontend Reliability'}</span>
-                      </div>
-                      <div className="text-[11px] text-amber-950/90 dark:text-amber-200/90 space-y-1.5 leading-relaxed">
-                        <div className="flex items-start gap-2">
-                          <span className="font-bold text-slate-800 dark:text-slate-200 shrink-0">🔔 {t('reminders.normal', 'Normal')}:</span>
-                          <span>{t('reminders.normalDesc', 'Single chime & notification at scheduled time')}</span>
-                        </div>
-                        <div className="flex items-start gap-2">
-                          <span className="font-bold text-rose-700 dark:text-rose-300 shrink-0">🚨 {t('reminders.strong', 'Strong')}:</span>
-                          <span>{t('reminders.strongDesc', 'Urgent pulses & repeats every 3s until opened, dismissed or snoozed')}</span>
-                        </div>
-                        <div className="pt-2 border-t border-amber-200/60 dark:border-amber-900/40 text-[10.5px] text-[#485B44] dark:text-[#9EB598] flex items-start gap-1.5">
-                          <span className="shrink-0">🛡️</span>
-                          <span>{isDraftFa ? 'یادآورها به صورت ۱۰۰٪ کلاینت‌محور (Service Worker، Web Worker و اعلان‌های سیستم) بدون نیاز به سرور کار می‌کنند و برای میزبانی در GitHub Pages آماده‌اند.' : 'Reminders run 100% client-side via Service Worker alarms, Web Worker heartbeats & browser notifications, fully static and GitHub Pages ready.'}</span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Master System Push Toggle */}
-                    <div className="flex items-center justify-between p-3.5 rounded-2xl bg-[#F7FAF4] dark:bg-[#1C2919] border border-[#DCEAD4] dark:border-[#2A3E26]">
-                      <div className="text-xs">
-                        <div className="font-bold text-[#151E14] dark:text-[#E8F2E4]">
-                          {t('settings.reminderPushAlerts', 'System Push Notifications')}
-                        </div>
-                        <div className="text-[#485B44] dark:text-[#9EB598] text-[11px]">
-                          {t('settings.reminderPushSub', 'Show banner notifications at reminder times')}
-                        </div>
-                      </div>
-                      <label className="relative inline-flex items-center cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={draftPrefs.reminderNotificationsEnabled ?? true}
-                          onChange={(e) => {
-                            const isEnabled = e.target.checked;
-                            setDraftPrefs((prev) => ({ ...prev, reminderNotificationsEnabled: isEnabled }));
-                            if (isEnabled && notifPermission !== 'granted') {
-                              handleRequestNotificationPermission();
-                            }
-                          }}
-                          className="sr-only peer"
-                        />
-                        <div className="w-9 h-5 bg-gray-300 dark:bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] rtl:after:left-auto rtl:after:right-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#80D141]"></div>
-                      </label>
-                    </div>
-
-                    {/* Reminder Sound Chimes Toggle */}
-                    <div className={`flex items-center justify-between p-3.5 rounded-2xl bg-[#F7FAF4] dark:bg-[#1C2919] border border-[#DCEAD4] dark:border-[#2A3E26] transition-opacity ${
-                      !(draftPrefs.soundEffectsEnabled ?? true) ? 'opacity-50 pointer-events-none' : ''
-                    }`}>
-                      <div className="text-xs">
-                        <div className="font-bold text-[#151E14] dark:text-[#E8F2E4]">
-                          {t('settings.reminderChimes', 'Reminder Sound Chimes')}
-                        </div>
-                        <div className="text-[#485B44] dark:text-[#9EB598] text-[11px]">
-                          {t('settings.reminderChimesSub', 'Play a harmonic chime when a reminder is triggered')}
-                        </div>
-                      </div>
-                      <label className="relative inline-flex items-center cursor-pointer">
-                        <input
-                          type="checkbox"
-                          disabled={!(draftPrefs.soundEffectsEnabled ?? true)}
-                          checked={(draftPrefs.reminderSoundEnabled ?? true) && (draftPrefs.soundEffectsEnabled ?? true)}
-                          onChange={(e) => {
-                            const isEnabled = e.target.checked;
-                            setDraftPrefs((prev) => ({ ...prev, reminderSoundEnabled: isEnabled }));
-                            if (isEnabled) {
-                              soundEngine.playGentleChime();
-                            }
-                          }}
-                          className="sr-only peer"
-                        />
-                        <div className="w-9 h-5 bg-gray-300 dark:bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] rtl:after:left-auto rtl:after:right-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#80D141]"></div>
-                      </label>
-                    </div>
-
-                    {/* Today's Scheduled Reminders Summary */}
-                    <div className="space-y-2 pt-1">
-                      <div className="flex items-center justify-between">
-                        <h4 className="text-xs font-bold text-[#151E14] dark:text-[#E8F2E4] flex items-center gap-1.5">
-                          <Clock className="w-3.5 h-3.5 text-[#80D141]" />
-                          <span>{t('settings.scheduledToday', "Today's Scheduled Reminders")}</span>
-                        </h4>
-                        <span className="text-[11px] font-semibold text-[#485B44] dark:text-[#9EB598]">
-                          {isDraftFa
-                            ? `${toPersianDigits(upcomingTodayReminders.length)} مورد`
-                            : `${upcomingTodayReminders.length} items`}
-                        </span>
-                      </div>
-
-                      {upcomingTodayReminders.length > 0 ? (
-                        <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
-                          {upcomingTodayReminders.map((item) => (
-                            <div
-                              key={item.id}
-                              className={`p-3 rounded-2xl bg-[#F7FAF4] dark:bg-[#1C2919] border border-[#DCEAD4] dark:border-[#2A3E26] flex items-center justify-between gap-3 text-xs ${
-                                item.isPast ? 'opacity-60' : ''
-                              }`}
-                            >
-                              <div className="flex items-center gap-2.5 min-w-0">
-                                <span className="font-bold font-mono text-[11px] px-2 py-0.5 rounded-lg bg-white dark:bg-[#263722] border border-[#DCEAD4] dark:border-[#33482E] text-[#151E14] dark:text-[#E8F2E4] shrink-0">
-                                  {isDraftFa ? toPersianDigits(item.reminderTime) : item.reminderTime}
-                                </span>
-                                <div className="min-w-0">
-                                  <div className="font-bold text-[#151E14] dark:text-[#E8F2E4] truncate">
-                                    {item.title}
-                                  </div>
-                                  <div className="text-[10px] text-[#485B44] dark:text-[#9EB598] flex items-center gap-1.5">
-                                    <span className="capitalize">
-                                      {item.entryType === 'event'
-                                        ? (isDraftFa ? 'رویداد' : 'Event')
-                                        : item.entryType === 'habit'
-                                        ? (isDraftFa ? 'عادت' : 'Habit')
-                                        : (isDraftFa ? 'وظیفه' : 'Task')}
-                                    </span>
-                                    <span>•</span>
-                                    <span>{item.label}</span>
-                                  </div>
-                                </div>
-                              </div>
-
-                              <div className="flex items-center gap-1.5 shrink-0">
-                                {item.intensity === 'strong' ? (
-                                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-100 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 border border-rose-300 dark:border-rose-800 flex items-center gap-1">
-                                    <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-ping"></span>
-                                    <span>{isDraftFa ? '🚨 شدید' : '🚨 Strong'}</span>
-                                  </span>
-                                ) : (
-                                  <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-[#EDF6E8] dark:bg-[#1C281A] text-[#3B4E37] dark:text-[#A8C4A0] border border-[#DCEAD4] dark:border-[#2A3E26]">
-                                    <span>{isDraftFa ? '🔔 معمولی' : '🔔 Normal'}</span>
-                                  </span>
-                                )}
-
-                                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full shrink-0 ${
-                                  item.isPast
-                                    ? 'bg-gray-100 dark:bg-gray-800 text-gray-500'
-                                    : 'bg-[#E8F8D8] dark:bg-[#1E3800] text-[#1C3700] dark:text-[#80D141] border border-[#80D141]/30'
-                                }`}>
-                                  {item.isPast
-                                    ? (isDraftFa ? 'گذشته' : 'Past')
-                                    : (isDraftFa ? 'پیش‌رو' : 'Upcoming')}
-                                </span>
-                              </div>
+                            <div className="w-9 h-9 rounded-xl bg-[#E8F8D8] dark:bg-[#1E3800] text-[#1E4300] dark:text-[#80D141] flex items-center justify-center shrink-0">
+                              {icon}
                             </div>
-                          ))}
-                        </div>
-                      ) : (
-                        <div className="p-4 rounded-2xl bg-[#F7FAF4] dark:bg-[#1C2919] border border-dashed border-[#DCEAD4] dark:border-[#2A3E26] text-center">
-                          <p className="text-xs text-[#485B44] dark:text-[#9EB598]">
-                            {t('settings.noRemindersToday', 'No reminders scheduled for today yet. Add reminders to your tasks or habits.')}
-                          </p>
-                        </div>
-                      )}
+
+                            <h5 className="font-bold text-sm text-[#151E14] dark:text-[#E8F2E4] truncate">{label}</h5>
+                          </div>
+
+                          <div className="flex items-center gap-1 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => handleMoveNavSection(index, 'up')}
+                              disabled={isFirst}
+                              aria-label={`Move ${label} Up`}
+                              className="min-w-[38px] min-h-[38px] flex items-center justify-center rounded-xl bg-white dark:bg-[#263722] border border-[#DCEAD4] dark:border-[#33482E] text-[#485B44] dark:text-[#9EB598] hover:text-[#151E14] dark:hover:text-[#E8F2E4] hover:bg-[#E2F2D9] dark:hover:bg-[#2E4229] disabled:opacity-30 disabled:pointer-events-none transition-all active:scale-90 cursor-pointer"
+                              title="Move Up"
+                            >
+                              <ArrowUp className="w-4 h-4 stroke-[2.5]" />
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => handleMoveNavSection(index, 'down')}
+                              disabled={isLast}
+                              aria-label={`Move ${label} Down`}
+                              className="min-w-[38px] min-h-[38px] flex items-center justify-center rounded-xl bg-white dark:bg-[#263722] border border-[#DCEAD4] dark:border-[#33482E] text-[#485B44] dark:text-[#9EB598] hover:text-[#151E14] dark:hover:text-[#E8F2E4] hover:bg-[#E2F2D9] dark:hover:bg-[#2E4229] disabled:opacity-30 disabled:pointer-events-none transition-all active:scale-90 cursor-pointer"
+                              title="Move Down"
+                            >
+                              <ArrowDown className="w-4 h-4 stroke-[2.5]" />
+                            </button>
+                          </div>
+                        </motion.div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Timer Tabs Order */}
+                <div id="section-settings-timer-tabs" className="pt-6 border-t border-[#DCEAD4]/75 dark:border-[#263722] space-y-3">
+                  <div className="flex items-center justify-between gap-3 flex-wrap">
+                    <div>
+                      <h4 className="text-sm font-bold text-[#151E14] dark:text-[#E8F2E4]">
+                        {t('settings.timerTabOrderSection', 'Timer Tabs Order')}
+                      </h4>
+                      <p className="text-xs text-[#485B44] dark:text-[#9EB598] mt-0.5">
+                        {t('settings.timerTabOrderDesc', 'Reorder Focus and Tracker tabs in the Timer section')}
+                      </p>
                     </div>
+
+                    <button
+                      type="button"
+                      onClick={handleResetTimerTabOrder}
+                      className="min-h-[36px] px-3 py-1.5 rounded-xl text-xs font-bold text-[#3B7E10] dark:text-[#80D141] bg-[#EDF6E8] dark:bg-[#1E2B1A] hover:bg-[#E2F2D9] dark:hover:bg-[#283A23] border border-[#D8E8D0] dark:border-[#273722] flex items-center gap-1.5 transition-colors cursor-pointer"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                      <span>{t('settings.resetTimerTabOrder', 'Reset Tabs Order')}</span>
+                    </button>
                   </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </section>
 
-          {/* Backup, Export & Danger Zone (Expandable) */}
-          <section id="section-settings-backup" className="rounded-[28px] bg-white dark:bg-[#182316] border border-[#D8E8D0] dark:border-[#22301F] shadow-sm transition-all duration-200 overflow-hidden">
-            <button
-              type="button"
-              onClick={() => toggleSection('backup')}
-              aria-expanded={expandedSections['backup']}
-              className="w-full p-4 sm:p-5 flex items-center justify-between text-start gap-3 hover:bg-[#F9FAF6] dark:hover:bg-[#1C2819] transition-colors cursor-pointer group"
-            >
-              <div className="flex items-center gap-3 min-w-0">
-                <div className="w-9 h-9 rounded-xl bg-[#E8F8D8] dark:bg-[#1E3800] border border-[#80D141]/50 flex items-center justify-center text-[#234A00] dark:text-[#80D141] shrink-0 group-hover:scale-105 transition-transform">
-                  <Download className="w-4 h-4" />
-                </div>
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <h3 className="font-display text-sm sm:text-base font-bold text-[#151E14] dark:text-[#E8F2E4]">
-                      {t('settings.backupSection', 'Backup & Data')}
-                    </h3>
-                    <span className="text-[11px] font-semibold text-[#3B7E10] dark:text-[#80D141] px-2 py-0.5 rounded-full bg-[#E8F8D8] dark:bg-[#1E3800] border border-[#80D141]/30">
-                      {isDraftFa ? 'صادرات و بازنشانی' : 'Export & Reset'}
-                    </span>
+                  <div className="space-y-2">
+                    {currentFocusTabOrder.map((tabId, index) => {
+                      const isFocus = tabId === 'focus';
+                      const icon = isFocus ? <Timer className="w-5 h-5" /> : <Clock className="w-5 h-5" />;
+                      const label = isFocus ? t('timer.tabFocus') : t('timer.tabTracker');
+                      const desc = isFocus ? t('settings.timerFocusDesc') : t('settings.timerTrackerDesc');
+                      const isFirst = index === 0;
+                      const isLast = index === currentFocusTabOrder.length - 1;
+
+                      return (
+                        <motion.div
+                          key={tabId}
+                          layout
+                          transition={{ type: 'spring', stiffness: 500, damping: 35 }}
+                          className="flex items-center justify-between p-3 sm:p-3.5 rounded-2xl bg-[#F7FAF4] dark:bg-[#1C2919] border border-[#DCEAD4] dark:border-[#2A3E26] hover:border-[#80D141]/60 transition-colors"
+                        >
+                          <div className="flex items-center gap-3 min-w-0">
+                            <span className="w-6 h-6 rounded-full bg-white dark:bg-[#263722] border border-[#DCEAD4] dark:border-[#344D2F] flex items-center justify-center text-xs font-bold tabular-nums text-[#485B44] dark:text-[#9EB598] shrink-0">
+                              {isDraftFa ? (index + 1).toLocaleString('fa-IR') : index + 1}
+                            </span>
+
+                            <div className="w-9 h-9 rounded-xl bg-[#E8F8D8] dark:bg-[#1E3800] text-[#1E4300] dark:text-[#80D141] flex items-center justify-center shrink-0">
+                              {icon}
+                            </div>
+
+                            <div className="min-w-0">
+                              <h5 className="font-bold text-sm text-[#151E14] dark:text-[#E8F2E4] truncate">{label}</h5>
+                              <p className="text-[11px] text-[#485B44] dark:text-[#9EB598] truncate hidden sm:block">{desc}</p>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-1 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => handleMoveTimerTab(index, 'up')}
+                              disabled={isFirst}
+                              aria-label={`Move ${label} Up`}
+                              className="min-w-[38px] min-h-[38px] flex items-center justify-center rounded-xl bg-white dark:bg-[#263722] border border-[#DCEAD4] dark:border-[#33482E] text-[#485B44] dark:text-[#9EB598] hover:text-[#151E14] dark:hover:text-[#E8F2E4] hover:bg-[#E2F2D9] dark:hover:bg-[#2E4229] disabled:opacity-30 disabled:pointer-events-none transition-all active:scale-90 cursor-pointer"
+                              title="Move Up"
+                            >
+                              <ArrowUp className="w-4 h-4 stroke-[2.5]" />
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => handleMoveTimerTab(index, 'down')}
+                              disabled={isLast}
+                              aria-label={`Move ${label} Down`}
+                              className="min-w-[38px] min-h-[38px] flex items-center justify-center rounded-xl bg-white dark:bg-[#263722] border border-[#DCEAD4] dark:border-[#33482E] text-[#485B44] dark:text-[#9EB598] hover:text-[#151E14] dark:hover:text-[#E8F2E4] hover:bg-[#E2F2D9] dark:hover:bg-[#2E4229] disabled:opacity-30 disabled:pointer-events-none transition-all active:scale-90 cursor-pointer"
+                              title="Move Down"
+                            >
+                              <ArrowDown className="w-4 h-4 stroke-[2.5]" />
+                            </button>
+                          </div>
+                        </motion.div>
+                      );
+                    })}
                   </div>
-                  <p className="text-xs text-[#485B44] dark:text-[#9EB598] truncate">
-                    {t('settings.backupDesc', 'Export or restore your workspace locally')}
-                  </p>
                 </div>
-              </div>
 
-              <div className="w-8 h-8 rounded-full flex items-center justify-center text-[#485B44] dark:text-[#9EB598] group-hover:text-[#151E14] dark:group-hover:text-[#E8F2E4] group-hover:bg-[#EDF6E8] dark:group-hover:bg-[#202E1E] transition-colors shrink-0">
-                <ChevronDown className={`w-4 h-4 transition-transform duration-200 ${expandedSections['backup'] ? 'rotate-180' : ''}`} />
-              </div>
-            </button>
+                {/* Focus Timer Presets Customization */}
+                <div className="pt-6 border-t border-[#DCEAD4]/75 dark:border-[#263722] space-y-3">
+                  <div className="flex items-center justify-between gap-3 flex-wrap">
+                    <div>
+                      <h4 className="text-sm font-bold text-[#151E14] dark:text-[#E8F2E4]">
+                        {t('focus.presetsTitle', 'Focus Timer Presets')}
+                      </h4>
+                      <p className="text-xs text-[#485B44] dark:text-[#9EB598] mt-0.5">
+                        {t(
+                          'focus.presetsDesc',
+                          'Customize, add, or delete the timer durations and modes available in your focus sessions.'
+                        )}
+                      </p>
+                    </div>
 
-            <AnimatePresence initial={false}>
-              {expandedSections['backup'] && (
-                <motion.div
-                  initial={{ height: 0, opacity: 0 }}
-                  animate={{ height: 'auto', opacity: 1 }}
-                  exit={{ height: 0, opacity: 0 }}
-                  transition={{ duration: 0.22, ease: 'easeInOut' }}
-                >
-                  <div className="px-5 pb-5 sm:px-6 sm:pb-6 pt-2 border-t border-[#DCEAD4]/80 dark:border-[#263722] space-y-4">
-                    <div className="grid grid-cols-2 gap-2 pt-1">
+                    <div className="flex items-center gap-2">
                       <button
-                        onClick={handleExport}
-                        className="py-2.5 px-3 rounded-2xl bg-[#F7FAF4] dark:bg-[#1C2919] hover:bg-[#E2F5D1] dark:hover:bg-[#2E422A] text-[#1D3A00] dark:text-[#A2EB68] text-xs font-bold border border-[#DCEAD4] dark:border-[#2A3E26] shadow-2xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                        type="button"
+                        id="btn-settings-add-preset"
+                        onClick={handleOpenSettingsAddPreset}
+                        className="min-h-[38px] px-3.5 py-1.5 rounded-xl bg-[#80D141] hover:bg-[#72BF36] text-[#0F2600] text-xs font-bold shadow-xs flex items-center gap-1.5 transition-all cursor-pointer"
                       >
-                        <Download className="w-3.5 h-3.5" />
-                        <span>{t('settings.exportBtn', 'Export JSON')}</span>
+                        <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
+                        <span>{t('focus.addPreset', 'Add Preset')}</span>
                       </button>
 
-                      <label className="py-2.5 px-3 rounded-2xl bg-[#F7FAF4] dark:bg-[#1C2919] hover:bg-[#E2F5D1] dark:hover:bg-[#2E422A] text-[#1D3A00] dark:text-[#A2EB68] text-xs font-bold border border-[#DCEAD4] dark:border-[#2A3E26] shadow-2xs flex items-center justify-center gap-1.5 cursor-pointer transition-colors">
-                        <Upload className="w-3.5 h-3.5" />
-                        <span>{t('settings.restoreBtn', 'Restore JSON')}</span>
-                        <input type="file" accept=".json" onChange={handleImportFile} className="hidden" />
-                      </label>
+                      <button
+                        type="button"
+                        onClick={handleResetSettingsPresets}
+                        className="min-h-[38px] px-3 py-1.5 rounded-xl bg-[#EDF6E8] dark:bg-[#1E2B1A] hover:bg-[#E2F2D9] dark:hover:bg-[#283A23] text-[#245209] dark:text-[#80D141] text-xs font-bold border border-[#DCEAD4] dark:border-[#263722] flex items-center gap-1.5 transition-colors cursor-pointer"
+                        title={t('focus.resetPresets', 'Reset to Defaults')}
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        <span className="hidden sm:inline">{t('focus.resetPresets', 'Reset to Defaults')}</span>
+                      </button>
                     </div>
+                  </div>
 
-                    {importStatus && (
-                      <div className="text-xs font-bold text-green-700 dark:text-green-400 text-center">
-                        {importStatus}
-                      </div>
-                    )}
+                  {settingsPresetSuccess && (
+                    <div className="p-2.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-300 dark:border-emerald-800 text-xs font-bold text-emerald-800 dark:text-emerald-200 flex items-center gap-2">
+                      <Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                      <span>{settingsPresetSuccess}</span>
+                    </div>
+                  )}
 
-                    {/* Clean All Predefined Data (Start Fresh) */}
-                    <div className="p-4 rounded-2xl bg-[#F7FAF4] dark:bg-[#1C2919] border border-[#DCEAD4] dark:border-[#2A3E26] space-y-3">
-                      <div className="flex items-start gap-2.5">
-                        <div className="w-8 h-8 rounded-xl bg-amber-100 dark:bg-amber-950/70 border border-amber-300 dark:border-amber-800 text-amber-800 dark:text-amber-300 flex items-center justify-center shrink-0">
-                          <Eraser className="w-4 h-4" />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <h4 className="text-xs sm:text-sm font-bold text-[#151E14] dark:text-[#E8F2E4]">
-                            {t('settings.cleanWorkspaceBtn', 'Clean All Predefined Tasks & Habits')}
-                          </h4>
-                          <p className="text-[11px] text-[#485B44] dark:text-[#9EB598] leading-relaxed mt-0.5">
-                            {t('settings.cleanWorkspaceDesc', 'Wipe out sample tasks, habits, and notes so you have a pristine, clean workspace ready for your own use. Your settings, API keys, and theme are preserved.')}
-                          </p>
-                        </div>
-                      </div>
+                  {settingsPresetError && (
+                    <div className="p-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/60 border border-rose-300 dark:border-rose-800 text-xs font-bold text-rose-800 dark:text-rose-200 flex items-center gap-2">
+                      <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0" />
+                      <span>{settingsPresetError}</span>
+                    </div>
+                  )}
 
-                      {!showCleanConfirm ? (
-                        <button
-                          type="button"
-                          id="btn-clean-predefined-data"
-                          onClick={() => {
-                            soundEngine.playPop();
-                            setShowCleanConfirm(true);
-                          }}
-                          className="w-full py-2.5 px-3 rounded-xl bg-white dark:bg-[#202E1E] hover:bg-amber-50 dark:hover:bg-amber-950/50 text-amber-800 dark:text-amber-300 text-xs font-bold border border-amber-300 dark:border-amber-800/80 shadow-2xs flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+                    {currentFocusPresets.map((preset) => {
+                      const localized = getLocalizedFocusPreset(preset, language);
+                      return (
+                        <div
+                          key={preset.id}
+                          className="p-3 rounded-2xl bg-[#F7FAF4] dark:bg-[#1C2919] border border-[#DCEAD4] dark:border-[#2A3E26] flex items-center justify-between gap-2.5"
                         >
-                          <Eraser className="w-3.5 h-3.5" />
-                          <span>{t('settings.cleanWorkspaceBtn', 'Clean All Predefined Tasks & Habits')}</span>
-                        </button>
-                      ) : (
-                        <div className="p-3 rounded-xl bg-amber-50/90 dark:bg-amber-950/60 border border-amber-300 dark:border-amber-800 space-y-2.5">
-                          <p className="text-xs font-semibold text-amber-950 dark:text-amber-200 leading-relaxed">
-                            {t('settings.cleanConfirmDesc', 'This will remove all sample habits, journal entries, brain dump thoughts, and schedules. Your settings and API keys will remain untouched.')}
-                          </p>
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <span className="w-9 h-9 rounded-xl bg-white dark:bg-[#263722] border border-[#DCEAD4] dark:border-[#33482E] flex items-center justify-center text-lg shrink-0 shadow-2xs">
+                              {preset.icon || '⏱️'}
+                            </span>
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-1.5 text-xs truncate">
+                                <span className="font-bold text-[#151E14] dark:text-[#E8F2E4] truncate">
+                                  {localized.label}
+                                </span>
+                                <span className="text-[#556D50] dark:text-[#8EA887]">·</span>
+                                <span className="font-semibold text-[#3B7E10] dark:text-[#80D141] tabular-nums shrink-0">
+                                  {preset.minutes === 0
+                                    ? t('focus.modeFlow', 'Flowmodoro')
+                                    : `${language === 'fa' ? toPersianDigits(preset.minutes) : preset.minutes} ${t('focus.minsUnit')}`}
+                                </span>
+                              </div>
+                              {localized.desc && (
+                                <p className="text-[11px] text-[#485B44] dark:text-[#9EB598] truncate mt-0.5">
+                                  {localized.desc}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-1 shrink-0">
                             <button
                               type="button"
-                              onClick={() => setShowCleanConfirm(false)}
-                              className="flex-1 py-1.5 px-3 rounded-lg bg-white dark:bg-[#1C281A] text-xs font-bold text-[#485B44] dark:text-[#9EB598] border border-[#DCEAD4] dark:border-[#2A3E26] hover:bg-[#EDF6E8] cursor-pointer"
+                              onClick={() => handleOpenSettingsEditPreset(preset)}
+                              className="min-w-[34px] min-h-[34px] flex items-center justify-center rounded-lg bg-white dark:bg-[#263722] hover:bg-[#E8F8D8] dark:hover:bg-[#2E4229] text-[#485B44] dark:text-[#9EB598] hover:text-[#151E14] dark:hover:text-[#E8F2E4] border border-[#DCEAD4] dark:border-[#33482E] transition-all cursor-pointer shadow-2xs"
+                              title={t('focus.editPreset', 'Edit Preset')}
                             >
-                              {t('common.cancel', 'Cancel')}
+                              <Pencil className="w-3.5 h-3.5" />
                             </button>
+
                             <button
                               type="button"
-                              id="btn-confirm-clean-workspace"
-                              onClick={handleCleanPredefinedData}
-                              className="flex-1 py-1.5 px-3 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold shadow-xs flex items-center justify-center gap-1.5 cursor-pointer"
+                              onClick={() => handleDeleteSettingsPreset(preset.id)}
+                              disabled={currentFocusPresets.length <= 1}
+                              className="min-w-[34px] min-h-[34px] flex items-center justify-center rounded-lg bg-white dark:bg-[#263722] hover:bg-rose-50 dark:hover:bg-rose-950/40 text-[#485B44] dark:text-[#9EB598] hover:text-rose-600 dark:hover:text-rose-400 border border-[#DCEAD4] dark:border-[#33482E] disabled:opacity-30 disabled:cursor-not-allowed transition-all cursor-pointer shadow-2xs"
+                              title={t('focus.deletePreset', 'Delete Preset')}
                             >
                               <Trash2 className="w-3.5 h-3.5" />
-                              <span>{isDraftFa ? 'بله، همه را پاک کن' : 'Yes, Clean All'}</span>
                             </button>
                           </div>
                         </div>
-                      )}
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            )}
 
-                      {cleanSuccessMessage && (
-                        <div className="p-2.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-300 dark:border-emerald-800 text-xs font-bold text-emerald-800 dark:text-emerald-300 flex items-center gap-2">
-                          <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
-                          <span>{cleanSuccessMessage}</span>
-                        </div>
+            {/* ==============================================================
+                CATEGORY 4: JOURNAL & TASK CATEGORIES
+               ============================================================== */}
+            {activeCategory === 'categories' && (
+              <div id="section-settings-categories" className="space-y-4">
+                <div className="flex items-center justify-between gap-3 flex-wrap">
+                  <div>
+                    <h4 className="text-sm font-bold text-[#151E14] dark:text-[#E8F2E4]">
+                      {t('settings.categoriesSection', 'Journal & Task Categories')}
+                    </h4>
+                    <p className="text-xs text-[#485B44] dark:text-[#9EB598] mt-0.5">
+                      {t('settings.categoriesDesc', 'Personalize categorization tags for your notes and tasks')}
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleResetCategories}
+                    className="min-h-[36px] px-3 py-1.5 rounded-xl text-xs font-bold text-[#3B7E10] dark:text-[#80D141] bg-[#EDF6E8] dark:bg-[#1E2B1A] hover:bg-[#E2F2D9] dark:hover:bg-[#283A23] border border-[#D8E8D0] dark:border-[#273722] flex items-center gap-1.5 transition-colors cursor-pointer"
+                    title="Reset to default tags"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>{t('common.reset', 'Reset')}</span>
+                  </button>
+                </div>
+
+                <div className="flex flex-wrap gap-2">
+                  {currentCategories.map((cat) => (
+                    <div
+                      key={cat}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#F7FAF4] dark:bg-[#1C2919] border border-[#DCEAD4] dark:border-[#2A3E26] text-xs font-bold text-[#151E14] dark:text-[#E8F2E4] shadow-2xs"
+                    >
+                      <span>{getCategoryLabel(cat, language)}</span>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveCategory(cat)}
+                        disabled={currentCategories.length <= 1}
+                        className="p-0.5 rounded-full hover:bg-[#FFEAEA] dark:hover:bg-[#3E1C18] text-[#79747E] hover:text-[#B3261E] dark:hover:text-[#F2B8B5] disabled:opacity-30 disabled:hover:bg-transparent transition-colors cursor-pointer"
+                        title={`Remove ${cat}`}
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+
+                <form onSubmit={handleAddCategory} className="flex flex-col sm:flex-row gap-2 pt-1">
+                  <input
+                    type="text"
+                    value={newCatInput}
+                    onChange={(e) => {
+                      setNewCatInput(e.target.value);
+                      if (catError) setCatError(null);
+                    }}
+                    maxLength={20}
+                    placeholder={t('settings.categoryPlaceholder', 'Add new category (e.g. Creative, Finance)...')}
+                    className="flex-1 px-3.5 py-2.5 rounded-xl bg-[#F7FAF4] dark:bg-[#1C2919] border border-[#DCEAD4] dark:border-[#2A3E26] text-xs text-[#151E14] dark:text-[#E8F2E4] focus:outline-none focus:ring-2 focus:ring-[#80D141]"
+                  />
+                  <button
+                    type="submit"
+                    disabled={!newCatInput.trim()}
+                    className="min-h-[40px] px-4 py-2.5 rounded-xl bg-[#80D141] hover:bg-[#72BF36] disabled:opacity-40 text-[#0F2600] text-xs font-bold shadow-xs flex items-center justify-center gap-1.5 transition-all shrink-0 cursor-pointer"
+                  >
+                    <Plus className="w-4 h-4 stroke-[2.5]" />
+                    <span>{t('settings.addCategory', 'Add Tag')}</span>
+                  </button>
+                </form>
+
+                {catError && (
+                  <p className="text-xs font-semibold text-[#B3261E] dark:text-[#F2B8B5]">{catError}</p>
+                )}
+              </div>
+            )}
+
+            {/* ==============================================================
+                CATEGORY 5: AUDIO & SENSORY CUES
+               ============================================================== */}
+            {activeCategory === 'audio' && (
+              <div id="section-settings-audio" className="space-y-4">
+                <div className="flex items-center justify-between gap-3 flex-wrap">
+                  <div>
+                    <h4 className="text-sm font-bold text-[#151E14] dark:text-[#E8F2E4]">
+                      {t('settings.audioSection', 'Audio & Sensory Cues')}
+                    </h4>
+                    <p className="text-xs text-[#485B44] dark:text-[#9EB598] mt-0.5">
+                      {t('settings.audioDesc', 'Haptic audio clicks & completion chimes')}
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => soundEngine.playGentleChime()}
+                    className="min-h-[36px] px-3 py-1.5 rounded-xl bg-[#EDF6E8] dark:bg-[#1E2B1A] hover:bg-[#E2F2D9] dark:hover:bg-[#283A23] text-xs font-bold text-[#3B4E37] dark:text-[#B6CCB0] border border-[#D8E8D0] dark:border-[#273722] flex items-center gap-1.5 cursor-pointer"
+                    title="Play test chime"
+                  >
+                    <Volume1 className="w-3.5 h-3.5" />
+                    <span>{t('common.test', 'Test')}</span>
+                  </button>
+                </div>
+
+                <div className="space-y-3">
+                  {/* Master UI Sounds */}
+                  <div className="flex items-center justify-between p-4 rounded-2xl bg-[#F7FAF4] dark:bg-[#1C2919] border border-[#DCEAD4] dark:border-[#2A3E26] gap-4">
+                    <div className="text-xs">
+                      <div className="font-bold text-[#151E14] dark:text-[#E8F2E4]">
+                        {t('settings.uiSounds', 'UI Sound Effects')}
+                      </div>
+                      <div className="text-[#485B44] dark:text-[#9EB598] text-[11px] mt-0.5">
+                        {t('settings.uiSoundsSub', 'Subtle pops, navigation taps, and feedback')}
+                      </div>
+                    </div>
+                    <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                      <input
+                        type="checkbox"
+                        checked={draftPrefs.soundEffectsEnabled ?? true}
+                        onChange={(e) => {
+                          const isEnabled = e.target.checked;
+                          setDraftPrefs((prev) => ({ ...prev, soundEffectsEnabled: isEnabled }));
+                          if (isEnabled) {
+                            soundEngine.playPop();
+                          }
+                        }}
+                        className="sr-only peer"
+                      />
+                      <div className="w-10 h-5.5 bg-gray-300 dark:bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] rtl:after:left-auto rtl:after:right-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4.5 after:w-4.5 after:transition-all peer-checked:bg-[#80D141]"></div>
+                    </label>
+                  </div>
+
+                  {/* Harmonic Completion Chime */}
+                  <div
+                    className={`flex items-center justify-between p-4 rounded-2xl bg-[#F7FAF4] dark:bg-[#1C2919] border border-[#DCEAD4] dark:border-[#2A3E26] gap-4 transition-opacity ${
+                      !(draftPrefs.soundEffectsEnabled ?? true) ? 'opacity-50 pointer-events-none' : ''
+                    }`}
+                  >
+                    <div className="text-xs">
+                      <div className="font-bold text-[#151E14] dark:text-[#E8F2E4]">
+                        {t('settings.taskChimes', 'Task Completion Chimes')}
+                      </div>
+                      <div className="text-[#485B44] dark:text-[#9EB598] text-[11px] mt-0.5">
+                        {t('settings.taskChimesSub', 'Gentle arpeggio on task done & timer finish')}
+                      </div>
+                    </div>
+                    <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                      <input
+                        type="checkbox"
+                        disabled={!(draftPrefs.soundEffectsEnabled ?? true)}
+                        checked={(draftPrefs.soundAlerts ?? true) && (draftPrefs.soundEffectsEnabled ?? true)}
+                        onChange={(e) => {
+                          const isAlerts = e.target.checked;
+                          setDraftPrefs((prev) => ({ ...prev, soundAlerts: isAlerts }));
+                          if (isAlerts && (draftPrefs.soundEffectsEnabled ?? true)) {
+                            soundEngine.playGentleChime();
+                          }
+                        }}
+                        className="sr-only peer"
+                      />
+                      <div className="w-10 h-5.5 bg-gray-300 dark:bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] rtl:after:left-auto rtl:after:right-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4.5 after:w-4.5 after:transition-all peer-checked:bg-[#80D141]"></div>
+                    </label>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ==============================================================
+                CATEGORY 6: DATA & BACKUP
+               ============================================================== */}
+            {activeCategory === 'data' && (
+              <div id="section-settings-backup" className="space-y-6">
+                {/* Export & Restore */}
+                <div className="space-y-3">
+                  <div>
+                    <h4 className="text-sm font-bold text-[#151E14] dark:text-[#E8F2E4]">
+                      {t('settings.backupSection', 'Backup & Data')}
+                    </h4>
+                    <p className="text-xs text-[#485B44] dark:text-[#9EB598] mt-0.5">
+                      {t('settings.backupDesc', 'Export or restore your workspace locally')}
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={handleExport}
+                      className="min-h-[44px] py-2.5 px-4 rounded-2xl bg-[#F7FAF4] dark:bg-[#1C2919] hover:bg-[#E2F5D1] dark:hover:bg-[#2E422A] text-[#1D3A00] dark:text-[#A2EB68] text-xs font-bold border border-[#DCEAD4] dark:border-[#2A3E26] shadow-2xs flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                    >
+                      <Download className="w-4 h-4" />
+                      <span>{t('settings.exportBtn', 'Export JSON')}</span>
+                    </button>
+
+                    <label className="min-h-[44px] py-2.5 px-4 rounded-2xl bg-[#F7FAF4] dark:bg-[#1C2919] hover:bg-[#E2F5D1] dark:hover:bg-[#2E422A] text-[#1D3A00] dark:text-[#A2EB68] text-xs font-bold border border-[#DCEAD4] dark:border-[#2A3E26] shadow-2xs flex items-center justify-center gap-2 cursor-pointer transition-colors">
+                      <Upload className="w-4 h-4" />
+                      <span>{t('settings.restoreBtn', 'Restore JSON')}</span>
+                      <input type="file" accept=".json" onChange={handleImportFile} className="hidden" />
+                    </label>
+                  </div>
+
+                  {importStatus && (
+                    <div
+                      className={`p-2.5 rounded-xl border text-xs font-bold flex items-center gap-2 ${
+                        importStatus.type === 'success'
+                          ? 'bg-emerald-50 dark:bg-emerald-950/50 border-emerald-300 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300'
+                          : 'bg-rose-50 dark:bg-rose-950/50 border-rose-300 dark:border-rose-800 text-rose-800 dark:text-rose-200'
+                      }`}
+                    >
+                      {importStatus.type === 'success' ? (
+                        <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+                      ) : (
+                        <AlertCircle className="w-4 h-4 shrink-0 text-rose-600 dark:text-rose-400" />
                       )}
+                      <span>{importStatus.message}</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Copy / Paste JSON Text Backup */}
+                <div
+                  id="section-settings-backup-text"
+                  className="pt-6 border-t border-[#DCEAD4]/75 dark:border-[#263722] space-y-3"
+                >
+                  <div>
+                    <h4 className="text-sm font-bold text-[#151E14] dark:text-[#E8F2E4]">
+                      {t('settings.jsonTextSection', 'Copy / Paste JSON Text')}
+                    </h4>
+                    <p className="text-xs text-[#485B44] dark:text-[#9EB598] mt-0.5">
+                      {t(
+                        'settings.jsonTextDesc',
+                        'Copy your backup data as text or paste raw JSON to restore if you cannot use files.'
+                      )}
+                    </p>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      id="btn-copy-json-backup"
+                      onClick={handleCopyBackupJson}
+                      className="min-h-[40px] px-4 py-2 rounded-xl bg-[#F7FAF4] dark:bg-[#1C2919] hover:bg-[#E2F5D1] dark:hover:bg-[#2E422A] text-[#1D3A00] dark:text-[#A2EB68] text-xs font-bold border border-[#DCEAD4] dark:border-[#2A3E26] shadow-2xs flex items-center gap-2 transition-colors cursor-pointer"
+                    >
+                      {jsonCopySuccess ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                      <span>
+                        {jsonCopySuccess
+                          ? t('settings.copiedJsonBtn', 'JSON Copied!')
+                          : t('settings.copyJsonBtn', 'Copy JSON Backup')}
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      id="btn-load-json-text"
+                      onClick={handleLoadBackupJson}
+                      className="min-h-[40px] px-3.5 py-2 rounded-xl bg-[#F7FAF4] dark:bg-[#1C2919] hover:bg-[#E2F5D1] dark:hover:bg-[#2E422A] text-[#3B4E37] dark:text-[#B6CCB0] text-xs font-bold border border-[#DCEAD4] dark:border-[#2A3E26] flex items-center gap-1.5 transition-colors cursor-pointer"
+                    >
+                      <Eye className="w-3.5 h-3.5" />
+                      <span>{t('settings.loadJsonBtn', 'Show JSON Text')}</span>
+                    </button>
+                  </div>
+
+                  <textarea
+                    id="textarea-backup-json"
+                    dir="ltr"
+                    rows={5}
+                    value={jsonTextValue}
+                    onChange={(e) => {
+                      setJsonTextValue(e.target.value);
+                      if (jsonTextStatus) setJsonTextStatus(null);
+                    }}
+                    placeholder={t('settings.jsonTextPlaceholder', 'Paste your exported JSON backup text here...')}
+                    className="w-full p-3.5 rounded-2xl bg-[#F7FAF4] dark:bg-[#141F13] border border-[#DCEAD4] dark:border-[#2A3E26] text-[11px] font-mono text-left text-[#151E14] dark:text-[#E8F2E4] placeholder:font-sans placeholder:text-[#79747E] dark:placeholder:text-[#8D9E8A] focus:outline-none focus:ring-2 focus:ring-[#80D141] resize-y"
+                  />
+
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <button
+                      type="button"
+                      id="btn-restore-json-text"
+                      onClick={handleRestoreFromJsonText}
+                      disabled={!jsonTextValue.trim()}
+                      className="min-h-[40px] px-4 py-2 rounded-xl bg-[#80D141] hover:bg-[#72BF36] disabled:opacity-40 text-[#0F2600] text-xs font-bold shadow-xs flex items-center gap-2 transition-all cursor-pointer"
+                    >
+                      <Upload className="w-4 h-4" />
+                      <span>{t('settings.restoreJsonTextBtn', 'Restore from JSON Text')}</span>
+                    </button>
+
+                    {jsonTextValue && (
+                      <button
+                        type="button"
+                        id="btn-clear-json-text"
+                        onClick={() => {
+                          soundEngine.playPop();
+                          setJsonTextValue('');
+                          setJsonTextStatus(null);
+                        }}
+                        className="min-h-[36px] px-3 py-1.5 rounded-xl text-xs font-bold text-[#485B44] dark:text-[#9EB598] hover:bg-[#EDF6E8] dark:hover:bg-[#22301F] transition-colors cursor-pointer"
+                      >
+                        {t('settings.clearResponse', 'Clear')}
+                      </button>
+                    )}
+                  </div>
+
+                  {jsonTextStatus && (
+                    <div
+                      className={`p-2.5 rounded-xl border text-xs font-bold flex items-center gap-2 ${
+                        jsonTextStatus.type === 'success'
+                          ? 'bg-emerald-50 dark:bg-emerald-950/50 border-emerald-300 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300'
+                          : 'bg-rose-50 dark:bg-rose-950/50 border-rose-300 dark:border-rose-800 text-rose-800 dark:text-rose-200'
+                      }`}
+                    >
+                      {jsonTextStatus.type === 'success' ? (
+                        <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+                      ) : (
+                        <AlertCircle className="w-4 h-4 shrink-0 text-rose-600 dark:text-rose-400" />
+                      )}
+                      <span>{jsonTextStatus.message}</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Clean All Predefined Data (Start Fresh) */}
+                <div className="pt-6 border-t border-[#DCEAD4]/75 dark:border-[#263722] space-y-4">
+                  <div className="p-4 rounded-2xl bg-[#F7FAF4] dark:bg-[#1C2919] border border-[#DCEAD4] dark:border-[#2A3E26] space-y-3">
+                    <div className="flex items-start gap-3">
+                      <div className="w-8 h-8 rounded-xl bg-amber-100 dark:bg-amber-950/70 border border-amber-300 dark:border-amber-800 text-amber-800 dark:text-amber-300 flex items-center justify-center shrink-0">
+                        <Eraser className="w-4 h-4" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <h4 className="text-xs sm:text-sm font-bold text-[#151E14] dark:text-[#E8F2E4]">
+                          {t('settings.cleanWorkspaceBtn', 'Clean All Predefined Tasks & Habits')}
+                        </h4>
+                        <p className="text-[11px] text-[#485B44] dark:text-[#9EB598] leading-relaxed mt-0.5">
+                          {t(
+                            'settings.cleanWorkspaceDesc',
+                            'Wipe out sample tasks, habits, and notes so you have a pristine, clean workspace ready for your own use. Your settings, API keys, and theme are preserved.'
+                          )}
+                        </p>
+                      </div>
                     </div>
 
-                    {/* Reset Demo Data */}
-                    <div className="p-4 rounded-2xl bg-[#F7FAF4] dark:bg-[#1A2617] border border-[#DCEAD4] dark:border-[#2A3E26] space-y-3">
-                      <div className="flex items-start gap-3">
-                        <div className="w-8 h-8 rounded-xl bg-blue-100 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 flex items-center justify-center shrink-0">
-                          <RotateCcw className="w-4 h-4" />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <h4 className="text-xs sm:text-sm font-bold text-[#151E14] dark:text-[#E8F2E4]">
-                            {t('settings.resetDemoBtn', 'Reset Demo Data')}
-                          </h4>
-                          <p className="text-[11px] text-[#485B44] dark:text-[#9EB598] leading-relaxed mt-0.5">
-                            {t('settings.resetConfirmDesc', 'Restore sample habits, tasks, projects, and journal entries so you can explore all Lerni companion features? Your settings and API keys will remain untouched.')}
-                          </p>
+                    {!showCleanConfirm ? (
+                      <button
+                        type="button"
+                        id="btn-clean-predefined-data"
+                        onClick={() => {
+                          soundEngine.playPop();
+                          setShowCleanConfirm(true);
+                        }}
+                        className="w-full min-h-[40px] py-2.5 px-3 rounded-xl bg-white dark:bg-[#202E1E] hover:bg-amber-50 dark:hover:bg-amber-950/50 text-amber-800 dark:text-amber-300 text-xs font-bold border border-amber-300 dark:border-amber-800/80 shadow-2xs flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                      >
+                        <Eraser className="w-3.5 h-3.5" />
+                        <span>{t('settings.cleanWorkspaceBtn', 'Clean All Predefined Tasks & Habits')}</span>
+                      </button>
+                    ) : (
+                      <div className="p-3 rounded-xl bg-amber-50/90 dark:bg-amber-950/60 border border-amber-300 dark:border-amber-800 space-y-2.5">
+                        <p className="text-xs font-semibold text-amber-950 dark:text-amber-200 leading-relaxed">
+                          {t(
+                            'settings.cleanConfirmDesc',
+                            'This will remove all sample habits, journal entries, brain dump thoughts, and schedules. Your settings and API keys will remain untouched.'
+                          )}
+                        </p>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setShowCleanConfirm(false)}
+                            className="flex-1 min-h-[36px] py-1.5 px-3 rounded-lg bg-white dark:bg-[#1C281A] text-xs font-bold text-[#485B44] dark:text-[#9EB598] border border-[#DCEAD4] dark:border-[#2A3E26] hover:bg-[#EDF6E8] cursor-pointer"
+                          >
+                            {t('common.cancel', 'Cancel')}
+                          </button>
+                          <button
+                            type="button"
+                            id="btn-confirm-clean-workspace"
+                            onClick={handleCleanPredefinedData}
+                            className="flex-1 min-h-[36px] py-1.5 px-3 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold shadow-xs flex items-center justify-center gap-1.5 cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>{isDraftFa ? 'بله، همه را پاک کن' : 'Yes, Clean All'}</span>
+                          </button>
                         </div>
                       </div>
+                    )}
 
-                      {!showResetConfirm ? (
-                        <button
-                          type="button"
-                          id="btn-reset-demo-data"
-                          onClick={() => {
-                            soundEngine.playPop();
-                            setShowResetConfirm(true);
-                            setShowCleanConfirm(false);
-                          }}
-                          className="w-full py-2.5 px-3 rounded-xl bg-white dark:bg-[#202E1E] hover:bg-blue-50 dark:hover:bg-blue-950/50 text-blue-800 dark:text-blue-300 text-xs font-bold border border-blue-300 dark:border-blue-800/80 shadow-2xs flex items-center justify-center gap-2 transition-colors cursor-pointer"
-                        >
-                          <RotateCcw className="w-3.5 h-3.5" />
-                          <span>{t('settings.resetDemoBtn', 'Reset Demo Data')}</span>
-                        </button>
-                      ) : (
-                        <div className="p-3 rounded-xl bg-blue-50/90 dark:bg-blue-950/60 border border-blue-300 dark:border-blue-800 space-y-2.5">
-                          <p className="text-xs font-semibold text-blue-950 dark:text-blue-200 leading-relaxed">
-                            {t('settings.resetConfirmDesc', 'Restore sample habits, tasks, projects, and journal entries so you can explore all Lerni companion features? Your settings and API keys will remain untouched.')}
-                          </p>
-                          <div className="flex items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={() => setShowResetConfirm(false)}
-                              className="flex-1 py-1.5 px-3 rounded-lg bg-white dark:bg-[#1C281A] text-xs font-bold text-[#485B44] dark:text-[#9EB598] border border-[#DCEAD4] dark:border-[#2A3E26] hover:bg-[#EDF6E8] cursor-pointer"
-                            >
-                              {t('common.cancel', 'Cancel')}
-                            </button>
-                            <button
-                              type="button"
-                              id="btn-confirm-reset-demo"
-                              onClick={handleResetDemoData}
-                              className="flex-1 py-1.5 px-3 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-xs flex items-center justify-center gap-1.5 cursor-pointer"
-                            >
-                              <RotateCcw className="w-3.5 h-3.5" />
-                              <span>{isDraftFa ? 'بله، بازنشانی داده‌های نمونه' : 'Yes, Reset Demo Data'}</span>
-                            </button>
-                          </div>
-                        </div>
-                      )}
-
-                      {resetSuccessMessage && (
-                        <div className="p-2.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-300 dark:border-emerald-800 text-xs font-bold text-emerald-800 dark:text-emerald-300 flex items-center gap-2">
-                          <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
-                          <span>{resetSuccessMessage}</span>
-                        </div>
-                      )}
-                    </div>
+                    {cleanSuccessMessage && (
+                      <div className="p-2.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-300 dark:border-emerald-800 text-xs font-bold text-emerald-800 dark:text-emerald-300 flex items-center gap-2">
+                        <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+                        <span>{cleanSuccessMessage}</span>
+                      </div>
+                    )}
                   </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </section>
 
-        </div>
+                  {/* Reset Demo Data */}
+                  <div className="p-4 rounded-2xl bg-[#F7FAF4] dark:bg-[#1A2617] border border-[#DCEAD4] dark:border-[#2A3E26] space-y-3">
+                    <div className="flex items-start gap-3">
+                      <div className="w-8 h-8 rounded-xl bg-blue-100 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 flex items-center justify-center shrink-0">
+                        <RotateCcw className="w-4 h-4" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <h4 className="text-xs sm:text-sm font-bold text-[#151E14] dark:text-[#E8F2E4]">
+                          {t('settings.resetDemoBtn', 'Reset Demo Data')}
+                        </h4>
+                        <p className="text-[11px] text-[#485B44] dark:text-[#9EB598] leading-relaxed mt-0.5">
+                          {t(
+                            'settings.resetConfirmDesc',
+                            'Restore sample habits, tasks, projects, and journal entries so you can explore all Lerni companion features? Your settings and API keys will remain untouched.'
+                          )}
+                        </p>
+                      </div>
+                    </div>
 
+                    {!showResetConfirm ? (
+                      <button
+                        type="button"
+                        id="btn-reset-demo-data"
+                        onClick={() => {
+                          soundEngine.playPop();
+                          setShowResetConfirm(true);
+                          setShowCleanConfirm(false);
+                        }}
+                        className="w-full min-h-[40px] py-2.5 px-3 rounded-xl bg-white dark:bg-[#202E1E] hover:bg-blue-50 dark:hover:bg-blue-950/50 text-blue-800 dark:text-blue-300 text-xs font-bold border border-blue-300 dark:border-blue-800/80 shadow-2xs flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        <span>{t('settings.resetDemoBtn', 'Reset Demo Data')}</span>
+                      </button>
+                    ) : (
+                      <div className="p-3 rounded-xl bg-blue-50/90 dark:bg-blue-950/60 border border-blue-300 dark:border-blue-800 space-y-2.5">
+                        <p className="text-xs font-semibold text-blue-950 dark:text-blue-200 leading-relaxed">
+                          {t(
+                            'settings.resetConfirmDesc',
+                            'Restore sample habits, tasks, projects, and journal entries so you can explore all Lerni companion features? Your settings and API keys will remain untouched.'
+                          )}
+                        </p>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setShowResetConfirm(false)}
+                            className="flex-1 min-h-[36px] py-1.5 px-3 rounded-lg bg-white dark:bg-[#1C281A] text-xs font-bold text-[#485B44] dark:text-[#9EB598] border border-[#DCEAD4] dark:border-[#2A3E26] hover:bg-[#EDF6E8] cursor-pointer"
+                          >
+                            {t('common.cancel', 'Cancel')}
+                          </button>
+                          <button
+                            type="button"
+                            id="btn-confirm-reset-demo"
+                            onClick={handleResetDemoData}
+                            className="flex-1 min-h-[36px] py-1.5 px-3 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-xs flex items-center justify-center gap-1.5 cursor-pointer"
+                          >
+                            <RotateCcw className="w-3.5 h-3.5" />
+                            <span>{isDraftFa ? 'بله، بازنشانی داده‌های نمونه' : 'Yes, Reset Demo Data'}</span>
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {resetSuccessMessage && (
+                      <div className="p-2.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-300 dark:border-emerald-800 text-xs font-bold text-emerald-800 dark:text-emerald-300 flex items-center gap-2">
+                        <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+                        <span>{resetSuccessMessage}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </section>
       </div>
 
+      {/* Modal for Adding/Editing Focus Preset from Settings */}
+      <AnimatePresence>
+        {showSettingsPresetModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              className="w-full max-w-md bg-white dark:bg-[#182316] rounded-3xl p-5 sm:p-6 shadow-2xl border border-[#DCEAD4] dark:border-[#263722] max-h-[90vh] flex flex-col overflow-hidden"
+            >
+              <div className="flex items-center justify-between pb-3 border-b border-[#DCEAD4] dark:border-[#263722] shrink-0">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-xl bg-[#E8F8D8] dark:bg-[#1E3800] text-[#1E4300] dark:text-[#80D141] flex items-center justify-center">
+                    {settingsIsCreatingPreset ? <Plus className="w-4 h-4" /> : <Pencil className="w-4 h-4" />}
+                  </div>
+                  <h4 className="font-bold text-sm sm:text-base text-[#151E14] dark:text-[#E8F2E4]">
+                    {settingsIsCreatingPreset ? t('focus.addPreset', 'Add Preset') : t('focus.editPreset', 'Edit Preset')}
+                  </h4>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setShowSettingsPresetModal(false)}
+                  className="w-8 h-8 rounded-full flex items-center justify-center text-[#485B44] dark:text-[#9EB598] hover:bg-[#EDF6E8] dark:hover:bg-[#202E1E] transition-colors cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {settingsPresetError && (
+                <div className="mt-3 p-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/60 border border-rose-300 dark:border-rose-800 text-xs font-bold text-rose-800 dark:text-rose-200 flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0" />
+                  <span>{settingsPresetError}</span>
+                </div>
+              )}
+
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  handleSaveSettingsPreset();
+                }}
+                className="flex-1 overflow-y-auto py-4 space-y-4"
+              >
+                <div>
+                  <label className="block text-xs font-bold text-[#151E14] dark:text-[#E8F2E4] mb-1">
+                    {t('focus.presetName', 'Preset Name')} *
+                  </label>
+                  <input
+                    type="text"
+                    value={settingsPresetLabel}
+                    onChange={(e) => setSettingsPresetLabel(e.target.value)}
+                    placeholder={t('focus.presetNamePlaceholder', 'e.g. Ultra Deep Work, Power Nap...')}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-[#F7FAF4] dark:bg-[#22301F] border border-[#DCEAD4] dark:border-[#2E402B] text-xs text-[#151E14] dark:text-[#E8F2E4] focus:outline-none focus:ring-2 focus:ring-[#80D141]"
+                    required
+                    autoFocus
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-[#151E14] dark:text-[#E8F2E4] mb-1">
+                    {t('focus.presetMinutes', 'Duration (Minutes, 0 for Flowmodoro)')} *
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min={0}
+                      max={360}
+                      value={settingsPresetMinutes}
+                      onChange={(e) => setSettingsPresetMinutes(Math.max(0, parseInt(e.target.value, 10) || 0))}
+                      className="w-28 px-3.5 py-2.5 rounded-xl bg-[#F7FAF4] dark:bg-[#22301F] border border-[#DCEAD4] dark:border-[#2E402B] text-xs text-[#151E14] dark:text-[#E8F2E4] focus:outline-none focus:ring-2 focus:ring-[#80D141] font-mono tabular-nums text-center"
+                      required
+                    />
+                    <span className="text-xs text-[#485B44] dark:text-[#9EB598] tabular-nums">
+                      {settingsPresetMinutes === 0
+                        ? t('focus.flowCountdownShort', 'Count-up open flowmodoro')
+                        : `${language === 'fa' ? toPersianDigits(settingsPresetMinutes) : settingsPresetMinutes} ${t('focus.minsUnit')}`}
+                    </span>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-[#151E14] dark:text-[#E8F2E4] mb-1">
+                    {t('focus.presetIcon', 'Emoji Icon')}
+                  </label>
+                  <div className="flex items-center gap-2 mb-2">
+                    <input
+                      type="text"
+                      value={settingsPresetIcon}
+                      onChange={(e) => setSettingsPresetIcon(e.target.value)}
+                      maxLength={4}
+                      className="w-14 h-10 rounded-xl bg-[#F7FAF4] dark:bg-[#22301F] border border-[#DCEAD4] dark:border-[#2E402B] text-lg text-center focus:outline-none focus:ring-2 focus:ring-[#80D141]"
+                    />
+                    <span className="text-[11px] text-[#485B44] dark:text-[#9EB598]">
+                      {t('focus.iconSuggestions', 'Suggestions:')}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    {['⚡', '🎯', '🍅', '🌊', '🚀', '⏱️', '🧘', '☕', '💡', '🔥', '🏆', '🧠', '📚', '💻', '🌿', '✨'].map((emoji) => (
+                      <button
+                        key={emoji}
+                        type="button"
+                        onClick={() => {
+                          soundEngine.playPop();
+                          setSettingsPresetIcon(emoji);
+                        }}
+                        className={`w-8 h-8 rounded-lg text-sm flex items-center justify-center transition-all cursor-pointer ${
+                          settingsPresetIcon === emoji
+                            ? 'bg-[#80D141] scale-110 shadow-xs'
+                            : 'bg-[#F7FAF4] dark:bg-[#22301F] hover:bg-[#E8F8D8] dark:hover:bg-[#2A3E26]'
+                        }`}
+                      >
+                        {emoji}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-[#151E14] dark:text-[#E8F2E4] mb-1">
+                    {t('focus.presetDesc', 'Description (Optional)')}
+                  </label>
+                  <input
+                    type="text"
+                    value={settingsPresetDesc}
+                    onChange={(e) => setSettingsPresetDesc(e.target.value)}
+                    placeholder={t('focus.presetDescPlaceholder', 'e.g. 60 min sustained deep flow')}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-[#F7FAF4] dark:bg-[#22301F] border border-[#DCEAD4] dark:border-[#2E402B] text-xs text-[#151E14] dark:text-[#E8F2E4] focus:outline-none focus:ring-2 focus:ring-[#80D141]"
+                  />
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-3 border-t border-[#DCEAD4] dark:border-[#263722]">
+                  <button
+                    type="button"
+                    onClick={() => setShowSettingsPresetModal(false)}
+                    className="min-h-[40px] px-4 py-2 rounded-xl text-xs font-bold text-[#485B44] dark:text-[#9EB598] hover:bg-[#EDF6E8] dark:hover:bg-[#253522] transition-colors cursor-pointer"
+                  >
+                    {t('common.cancel', 'Cancel')}
+                  </button>
+                  <button
+                    type="submit"
+                    className="min-h-[40px] px-5 py-2 rounded-xl bg-[#80D141] hover:bg-[#72BF36] text-[#0F2600] text-xs font-bold shadow-xs transition-all flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Check className="w-3.5 h-3.5 stroke-[2.5]" />
+                    <span>{t('focus.savePreset', 'Save Preset')}</span>
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };

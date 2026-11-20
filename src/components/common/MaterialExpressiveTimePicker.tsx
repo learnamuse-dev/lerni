@@ -226,7 +226,8 @@ export const MaterialExpressiveTimePicker: React.FC<MaterialExpressiveTimePicker
                   <button
                     type="button"
                     onClick={handleClose}
-                    className="p-1 rounded-full text-[#485B44] dark:text-[#9EB598] hover:bg-[#DCEAD4] dark:hover:bg-[#263722] transition-colors"
+                    aria-label="Close"
+                    className="p-1 rounded-full text-[#485B44] dark:text-[#9EB598] hover:bg-[#DCEAD4] dark:hover:bg-[#263722] transition-colors cursor-pointer"
                   >
                     <X className="w-4 h-4" />
                   </button>
@@ -251,7 +252,7 @@ export const MaterialExpressiveTimePicker: React.FC<MaterialExpressiveTimePicker
                     {hour12 < 10 ? `0${hour12}` : `${hour12}`}
                   </button>
 
-                  <span className="text-2xl font-black text-[#485B44] dark:text-[#9EB598] animate-pulse">
+                  <span className="text-2xl font-black text-[#485B44] dark:text-[#9EB598]">
                     :
                   </span>
 

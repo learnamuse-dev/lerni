@@ -1,12 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, Plus, Sparkles, Clock, Zap, ArrowLeft, CalendarDays } from 'lucide-react';
-import { Habit, EnergyLevel, TimeBucket, ENERGY_LEVELS, EntryReminder } from '../../types';
+import { Plus, Sparkles, Clock, Zap, ArrowLeft, CalendarDays } from 'lucide-react';
+import { Habit, EnergyLevel, TimeBucket, ENERGY_LEVELS } from '../../types';
 import { getTodayDateString } from '../../utils/storage';
 import { soundEngine } from '../../utils/audioSynth';
-import { useI18n, getEnergyLabel } from '../../utils/i18n';
+import { useI18n, getEnergyLabel, toPersianDigits } from '../../utils/i18n';
 import { MaterialExpressiveTimePicker } from '../common/MaterialExpressiveTimePicker';
-import { ReminderPicker } from '../common/ReminderPicker';
 
 interface AddHabitModalProps {
   isOpen: boolean;
@@ -25,7 +24,17 @@ export const AddHabitModal: React.FC<AddHabitModalProps> = ({ isOpen, onClose, o
   const [durationMinutes, setDurationMinutes] = useState<string>('');
   const [activeDays, setActiveDays] = useState<number[]>(ALL_DAYS);
   const [energyCost, setEnergyCost] = useState<EnergyLevel>('low');
-  const [reminders, setReminders] = useState<EntryReminder[]>([]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
 
   const dayOptions = isFa
     ? [
@@ -97,7 +106,6 @@ export const AddHabitModal: React.FC<AddHabitModalProps> = ({ isOpen, onClose, o
       completedDates: [],
       streakCount: 0,
       totalCompletions: 0,
-      reminders: reminders.length > 0 ? reminders : undefined,
     };
 
     onAddHabit(newHabit);
@@ -106,7 +114,6 @@ export const AddHabitModal: React.FC<AddHabitModalProps> = ({ isOpen, onClose, o
     setTargetTime('');
     setDurationMinutes('');
     setActiveDays(ALL_DAYS);
-    setReminders([]);
     onClose();
   };
 
@@ -131,8 +138,8 @@ export const AddHabitModal: React.FC<AddHabitModalProps> = ({ isOpen, onClose, o
                 <button
                   type="button"
                   onClick={onClose}
-                  className="p-2 -ml-2 rounded-xl text-[#485B44] dark:text-[#9EB598] hover:bg-[#EAEFE6] dark:hover:bg-[#1C281A] transition-colors flex items-center gap-1.5 font-medium text-sm cursor-pointer"
-                  aria-label={t('common.close', 'Close')}
+                  className="p-2 -ms-2 rounded-xl text-[#485B44] dark:text-[#9EB598] hover:bg-[#EAEFE6] dark:hover:bg-[#1C281A] transition-colors flex items-center gap-1.5 font-medium text-sm cursor-pointer"
+                  aria-label={t('common.back', 'Back')}
                 >
                   <ArrowLeft className="w-5 h-5 rtl:rotate-180" />
                   <span className="hidden sm:inline">{t('common.back', 'Back')}</span>
@@ -150,25 +157,6 @@ export const AddHabitModal: React.FC<AddHabitModalProps> = ({ isOpen, onClose, o
                     </p>
                   </div>
                 </div>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={onClose}
-                  className="p-2 rounded-xl text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-[#F2F8EE] dark:hover:bg-[#1F2D1C] transition-colors sm:hidden"
-                  aria-label={t('common.close', 'Close')}
-                >
-                  <X className="w-5 h-5" />
-                </button>
-                <button
-                  type="submit"
-                  disabled={!title.trim()}
-                  className="hidden sm:flex px-6 py-2.5 rounded-xl bg-[#80D141] hover:bg-[#72BF36] disabled:opacity-40 text-[#0F2600] font-bold text-xs shadow-xs items-center gap-1.5 transition-all cursor-pointer"
-                >
-                  <Plus className="w-4 h-4" />
-                  <span>{t('habits.plantHabit')}</span>
-                </button>
               </div>
             </div>
 
@@ -396,13 +384,13 @@ export const AddHabitModal: React.FC<AddHabitModalProps> = ({ isOpen, onClose, o
                         soundEngine.playPop();
                         setDurationMinutes(String(mins));
                       }}
-                      className={`px-2 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                      className={`px-2 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer tabular-nums ${
                         durationMinutes === String(mins)
                           ? 'bg-[#80D141] text-[#0F2600]'
                           : 'bg-white dark:bg-[#202E1E] text-[#485B44] dark:text-[#9EB598] border border-[#DCEAD4] dark:border-[#263722] hover:bg-[#EDF6E8]'
                       }`}
                     >
-                      {mins}m
+                      {isFa ? `${toPersianDigits(mins)}${t('focus.minsShort', 'د')}` : `${mins}m`}
                     </button>
                   ))}
                 </div>
@@ -414,32 +402,15 @@ export const AddHabitModal: React.FC<AddHabitModalProps> = ({ isOpen, onClose, o
             💡 {t('habits.smartPlannerNote', 'Used by the Smart Planner to place this habit into your daily schedule')}
           </p>
 
-          {/* Reminders & Notifications Section */}
-          <div className="pt-3 border-t border-[#DCEAD4] dark:border-[#263722]">
-            <ReminderPicker
-              reminders={reminders}
-              onChange={setReminders}
-              targetTime={targetTime}
-              itemType="habit"
-            />
-          </div>
-
             </div>
           </div>
 
           {/* Bottom Sticky Action Bar */}
-          <div className="shrink-0 sticky bottom-0 z-20 bg-[#F7FAF4]/95 dark:bg-[#121B11]/95 backdrop-blur-md px-4 sm:px-8 py-3.5 border-t border-[#DCEAD4] dark:border-[#22301F] flex items-center justify-end gap-3">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-5 py-2.5 rounded-xl bg-[#F2F8EE] dark:bg-[#1A2617] text-xs font-bold text-[#485B44] dark:text-[#9EB598] hover:bg-[#E2F5D1] transition-colors cursor-pointer"
-            >
-              {t('common.cancel')}
-            </button>
+          <div className="shrink-0 sticky bottom-0 z-20 bg-[#F7FAF4]/95 dark:bg-[#121B11]/95 backdrop-blur-md px-4 sm:px-8 py-3.5 border-t border-[#DCEAD4] dark:border-[#22301F] flex items-center justify-end">
             <button
               type="submit"
               disabled={!title.trim()}
-              className="flex-1 sm:flex-initial px-6 py-2.5 rounded-xl bg-[#80D141] hover:bg-[#72BF36] disabled:opacity-40 text-[#0F2600] text-xs font-bold shadow-md flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+              className="w-full sm:w-auto px-6 py-2.5 rounded-xl bg-[#80D141] hover:bg-[#72BF36] disabled:opacity-40 text-[#0F2600] text-xs font-bold shadow-md flex items-center justify-center gap-1.5 transition-all cursor-pointer"
             >
               <Plus className="w-4 h-4" />
               <span>{t('habits.plantHabit')}</span>

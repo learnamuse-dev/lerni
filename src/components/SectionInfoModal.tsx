@@ -224,9 +224,10 @@ export const SectionInfoModal: React.FC<SectionInfoModalProps> = ({
           </div>
 
           <button
+            type="button"
             id="btn-close-help-modal"
             onClick={onClose}
-            className="p-2 rounded-full hover:bg-[#EDF6E8] dark:hover:bg-[#263722] text-[#485B44] dark:text-[#9EB598] transition-colors"
+            className="p-2 rounded-full hover:bg-[#EDF6E8] dark:hover:bg-[#263722] text-[#485B44] dark:text-[#9EB598] transition-colors cursor-pointer"
             aria-label="Close Help"
           >
             <X className="w-5 h-5" />
@@ -235,19 +236,20 @@ export const SectionInfoModal: React.FC<SectionInfoModalProps> = ({
 
         {/* Section Segmented Navigation Tabs */}
         <div className="px-5 pt-3 pb-2 shrink-0 bg-[#F2F7EE] dark:bg-[#141E12] border-b border-[#DCEAD4] dark:border-[#263722]">
-          <div className="grid grid-cols-4 gap-1.5 bg-[#E4EFE0] dark:bg-[#1C281A] p-1 rounded-2xl border border-[#D0E2C8] dark:border-[#263722]">
+          <div className="flex items-center gap-1 overflow-x-auto no-scrollbar sm:grid sm:grid-cols-5 sm:gap-1.5 bg-[#E4EFE0] dark:bg-[#1C281A] p-1 rounded-2xl border border-[#D0E2C8] dark:border-[#263722]">
             {(Object.keys(SECTION_GUIDES) as SectionInfoType[]).map((secKey) => {
               const sec = SECTION_GUIDES[secKey];
               const isActive = activeTab === secKey;
               return (
                 <button
+                  type="button"
                   key={secKey}
                   id={`tab-help-${secKey}`}
                   onClick={() => {
                     soundEngine.playPop();
                     setActiveTab(secKey);
                   }}
-                  className={`px-2 py-2 rounded-xl text-xs font-bold transition-all flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-1.5 text-center ${
+                  className={`px-2.5 sm:px-2 py-2 rounded-xl text-xs font-bold transition-all flex flex-row sm:flex-col lg:flex-row items-center justify-center gap-1.5 sm:gap-1 text-center shrink-0 whitespace-nowrap cursor-pointer ${
                     isActive
                       ? 'bg-[#80D141] text-[#0F2600] shadow-xs'
                       : 'text-[#485B44] dark:text-[#9EB598] hover:text-[#151E14] dark:hover:text-[#E8F2E4]'
@@ -294,20 +296,6 @@ export const SectionInfoModal: React.FC<SectionInfoModalProps> = ({
               </div>
             ))}
           </div>
-        </div>
-
-        {/* Modal Footer */}
-        <div className="p-4 px-5 border-t border-[#DCEAD4] dark:border-[#263722] flex items-center justify-between shrink-0 bg-white dark:bg-[#182316]">
-          <div className="text-[11px] text-[#485B44] dark:text-[#9EB598] font-medium flex items-center gap-1">
-            <span>💡 Click any tab above to switch guides</span>
-          </div>
-
-          <button
-            onClick={onClose}
-            className="px-5 py-2 rounded-full bg-[#80D141] hover:bg-[#72BF36] text-[#0F2600] text-xs font-bold shadow-xs active:scale-95 transition-all"
-          >
-            Got it, thanks!
-          </button>
         </div>
       </motion.div>
     </div>

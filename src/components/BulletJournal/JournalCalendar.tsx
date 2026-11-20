@@ -105,16 +105,18 @@ export const JournalCalendar: React.FC<JournalCalendarProps> = ({
   };
 
   // Group entries by date
-  type DateMeta = { total: number; tasks: number; completedTasks: number; events: number; notes: number; hasPriority: boolean };
+  type DateMeta = { total: number; tasks: number; openTasks: number; completedTasks: number; events: number; notes: number; hasPriority: boolean };
   const initialEntriesByDate: Record<string, DateMeta> = {};
   const entriesByDate = entries.reduce((acc, entry) => {
     if (!acc[entry.date]) {
-      acc[entry.date] = { total: 0, tasks: 0, completedTasks: 0, events: 0, notes: 0, hasPriority: false };
+      acc[entry.date] = { total: 0, tasks: 0, openTasks: 0, completedTasks: 0, events: 0, notes: 0, hasPriority: false };
     }
     acc[entry.date].total += 1;
     if (entry.type === 'task') {
       acc[entry.date].tasks += 1;
-      if (entry.status === 'completed') {
+      if (entry.status === 'open') {
+        acc[entry.date].openTasks += 1;
+      } else if (entry.status === 'completed') {
         acc[entry.date].completedTasks += 1;
       }
     } else if (entry.type === 'event') {
@@ -203,7 +205,7 @@ export const JournalCalendar: React.FC<JournalCalendarProps> = ({
           const isSelected = calDay.dateStr === selectedDate;
           const meta = entriesByDate[calDay.dateStr];
           const hasEntries = Boolean(meta && meta.total > 0);
-          const allTasksDone = Boolean(meta && meta.tasks > 0 && meta.completedTasks === meta.tasks);
+          const allTasksHandled = Boolean(meta && meta.tasks > 0 && meta.openTasks === 0);
 
           return (
             <button
@@ -240,7 +242,7 @@ export const JournalCalendar: React.FC<JournalCalendarProps> = ({
                         className={`w-1.5 h-1.5 rounded-full ${
                           isSelected
                             ? 'bg-[#0F2600]'
-                            : allTasksDone
+                            : allTasksHandled
                             ? 'bg-[#3B7E10] dark:bg-[#80D141]'
                             : 'bg-amber-500'
                         }`}

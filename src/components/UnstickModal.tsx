@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, Sparkles, Zap, Play, CheckCircle2, Circle, RefreshCw, AlertCircle } from 'lucide-react';
+import { ArrowLeft, Sparkles, Play, CheckCircle2, Circle, RefreshCw, AlertCircle } from 'lucide-react';
 import { BujoEntry, MicroStep, EnergyLevel } from '../types';
 import { soundEngine } from '../utils/audioSynth';
 import { useI18n, toPersianDigits } from '../utils/i18n';
@@ -93,6 +93,17 @@ export const UnstickModal: React.FC<UnstickModalProps> = ({
       setMissingKeyError(null);
     }
   }, [isOpen, language, t]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
 
   if (!isOpen || !entry) return null;
 
@@ -252,28 +263,29 @@ export const UnstickModal: React.FC<UnstickModalProps> = ({
       {/* Top Header Bar */}
       <div className="w-full bg-[#EDF6E8] dark:bg-[#182316] border-b border-[#D8E8D0] dark:border-[#263722] px-4 sm:px-8 py-3.5 flex items-center justify-between shrink-0 shadow-xs">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-2xl bg-[#80D141] text-[#0F2600] flex items-center justify-center shadow-xs shrink-0">
-            <Sparkles className="w-5 h-5" />
-          </div>
-          <div>
-            <h2 className="font-display text-base sm:text-lg font-bold text-[#151E14] dark:text-[#E8F2E4]">
-              {t('unstick.title')}
-            </h2>
-            <p className="text-xs text-[#485B44] dark:text-[#9EB598] font-medium">
-              {t('unstick.subtitle')}
-            </p>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label={t('common.back', 'Back')}
+            className="p-2 -ms-2 rounded-xl text-[#485B44] dark:text-[#9EB598] hover:bg-[#DCEAD4] dark:hover:bg-[#2A3D26] transition-colors flex items-center gap-1.5 font-medium text-sm cursor-pointer"
+          >
+            <ArrowLeft className="w-5 h-5 rtl:rotate-180" />
+            <span className="hidden sm:inline">{t('common.back', 'Back')}</span>
+          </button>
+          <div className="flex items-center gap-2.5">
+            <div className="w-10 h-10 rounded-2xl bg-[#80D141] text-[#0F2600] flex items-center justify-center shadow-xs shrink-0">
+              <Sparkles className="w-5 h-5" />
+            </div>
+            <div>
+              <h2 className="font-display text-base sm:text-lg font-bold text-[#151E14] dark:text-[#E8F2E4]">
+                {t('unstick.title')}
+              </h2>
+              <p className="text-xs text-[#485B44] dark:text-[#9EB598] font-medium">
+                {t('unstick.subtitle')}
+              </p>
+            </div>
           </div>
         </div>
-
-        <button
-          onClick={onClose}
-          aria-label={t('unstick.close')}
-          title={t('unstick.close')}
-          className="p-2 sm:px-4 sm:py-2 rounded-full bg-[#EDF6E8] dark:bg-[#202E1E] hover:bg-[#DCEAD4] dark:hover:bg-[#2A3D26] text-[#3B4E37] dark:text-[#B6CCB0] text-xs font-bold flex items-center gap-1.5 transition-colors shrink-0"
-        >
-          <X className="w-5 h-5" />
-          <span className="hidden sm:inline">{t('unstick.close')}</span>
-        </button>
       </div>
 
       {/* Main Content Area */}
@@ -451,16 +463,6 @@ export const UnstickModal: React.FC<UnstickModalProps> = ({
         )}
 
         </div>
-      </div>
-
-      {/* Sticky Bottom Bar */}
-      <div className="w-full border-t border-[#D8E8D0] dark:border-[#263722] bg-[#EDF6E8]/95 dark:bg-[#182316]/95 backdrop-blur-md px-4 sm:px-8 py-3.5 flex items-center justify-end shrink-0">
-        <button
-          onClick={onClose}
-          className="px-6 py-2.5 rounded-full bg-[#80D141] hover:bg-[#72BF36] text-[#0F2600] text-xs sm:text-sm font-bold shadow-md active:scale-95 transition-all"
-        >
-          {t('unstick.done')}
-        </button>
       </div>
     </motion.div>
   );
