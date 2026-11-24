@@ -1,4 +1,4 @@
-import { Habit, BujoEntry, FocusSession, UserPreferences, BrainDumpItem, EnergyLevel, DEFAULT_NAV_ORDER, NavSection, DayPlan, Chronotype, Project, ProjectTask, TimeLog, ActiveTimeTrackerState, FocusTab, DEFAULT_FOCUS_TAB_ORDER } from '../types';
+import { Habit, BujoEntry, FocusSession, UserPreferences, BrainDumpItem, EnergyLevel, DEFAULT_NAV_ORDER, NavSection, DayPlan, Chronotype, Project, ProjectTask, TimeLog, ActiveTimeTrackerState, FocusTab, DEFAULT_FOCUS_TAB_ORDER, DEFAULT_JOURNAL_CARD_FIELDS, DEFAULT_HABIT_CARD_FIELDS, DEFAULT_OPENROUTER_MODEL } from '../types';
 
 export const getTodayDateString = (): string => {
   const d = new Date();
@@ -310,21 +310,20 @@ const DEFAULT_PREFERENCES: UserPreferences = {
   soundAlerts: true,
   soundEffectsEnabled: true,
   journalCategories: DEFAULT_JOURNAL_CATEGORIES,
+  journalCardFields: DEFAULT_JOURNAL_CARD_FIELDS,
+  habitCardFields: DEFAULT_HABIT_CARD_FIELDS,
   navOrder: DEFAULT_NAV_ORDER,
   focusTabOrder: DEFAULT_FOCUS_TAB_ORDER,
   theme: 'dark',
   accentColor: '#80D141',
   accentColorName: 'Lerni Green (Default)',
-  aiProvider: 'gemini',
-  geminiApiKey: '',
-  geminiModel: 'gemini-3.1-flash-lite',
+  aiProvider: 'openrouter',
   openRouterApiKey: '',
-  openRouterModel: 'google/gemini-2.5-flash',
+  openRouterModel: DEFAULT_OPENROUTER_MODEL,
   customOpenAiBaseUrl: (typeof import.meta !== 'undefined' && import.meta.env?.VITE_OPENAI_COMPATIBLE_BASE_URL) || 'http://localhost:11434/v1',
   customOpenAiApiKey: (typeof import.meta !== 'undefined' && import.meta.env?.VITE_OPENAI_COMPATIBLE_API_KEY) || '',
   customOpenAiModel: (typeof import.meta !== 'undefined' && import.meta.env?.VITE_OPENAI_COMPATIBLE_MODEL) || 'llama3.2',
   customOpenAiApiVersion: (typeof import.meta !== 'undefined' && import.meta.env?.VITE_OPENAI_COMPATIBLE_API_VERSION) || '',
-  useSharedFreeKey: true,
   plannerCustomInstructions: '',
 };
 
@@ -477,13 +476,25 @@ export const storage = {
         ? parsed.chronotype
         : 'balanced';
 
+      const { geminiApiKey: _removedKey, geminiModel: _removedModel, useSharedFreeKey: _removedShared, ...restParsed } = parsed;
+      const aiProvider = parsed.aiProvider === 'custom' ? 'custom' : 'openrouter';
+
       return {
         ...DEFAULT_PREFERENCES,
-        ...parsed,
+        ...restParsed,
+        aiProvider,
         currentEnergy,
         chronotype,
         soundEffectsEnabled,
         journalCategories,
+        journalCardFields: {
+          ...DEFAULT_JOURNAL_CARD_FIELDS,
+          ...(parsed.journalCardFields && typeof parsed.journalCardFields === 'object' ? parsed.journalCardFields : {}),
+        },
+        habitCardFields: {
+          ...DEFAULT_HABIT_CARD_FIELDS,
+          ...(parsed.habitCardFields && typeof parsed.habitCardFields === 'object' ? parsed.habitCardFields : {}),
+        },
         navOrder,
         focusTabOrder,
       };

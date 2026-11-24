@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import confetti from 'canvas-confetti';
 import { 
@@ -18,9 +18,11 @@ import {
   ChevronRight,
   CalendarDays,
   Sparkles,
-  Loader2
+  Loader2,
+  Eye,
+  EyeOff
 } from 'lucide-react';
-import { Habit, TimeBucket, EnergyLevel, ENERGY_LEVELS, isHabitActiveOnDate, UserPreferences } from '../../types';
+import { Habit, TimeBucket, EnergyLevel, ENERGY_LEVELS, isHabitActiveOnDate, UserPreferences, HabitCardFields, DEFAULT_HABIT_CARD_FIELDS } from '../../types';
 import { 
   getTodayKey, 
   shiftDate, 
@@ -34,6 +36,8 @@ import { generateTenSecondHabitFallback } from '../../utils/aiScheduler';
 import { AddHabitModal } from './AddHabitModal';
 import { EditHabitModal } from './EditHabitModal';
 import { MaterialExpressiveDatePicker } from '../common/MaterialExpressiveDatePicker';
+import { AddEntryModeChooser } from '../common/AddEntryModeChooser';
+import { VoiceEntryModal } from '../common/VoiceEntryModal';
 
 interface HabitTrackerProps {
   habits: Habit[];
@@ -41,6 +45,8 @@ interface HabitTrackerProps {
   currentEnergy: EnergyLevel;
   prefs?: UserPreferences;
   onOpenSettings?: () => void;
+  cardFields?: HabitCardFields;
+  onUpdateCardFields?: (fields: HabitCardFields) => void;
 }
 
 export const HabitTracker: React.FC<HabitTrackerProps> = ({
@@ -49,14 +55,43 @@ export const HabitTracker: React.FC<HabitTrackerProps> = ({
   currentEnergy,
   prefs,
   onOpenSettings,
+  cardFields,
+  onUpdateCardFields,
 }) => {
   const { t, language } = useI18n();
+  const [localCardFields, setLocalCardFields] = useState<HabitCardFields>(
+    cardFields || prefs?.habitCardFields || DEFAULT_HABIT_CARD_FIELDS
+  );
+  useEffect(() => {
+    const incoming = cardFields || prefs?.habitCardFields;
+    if (incoming) {
+      setLocalCardFields(incoming);
+    }
+  }, [cardFields, prefs?.habitCardFields]);
+
+  const effectiveCardFields = cardFields || prefs?.habitCardFields || localCardFields;
+  const updateCardFields = (next: HabitCardFields) => {
+    setLocalCardFields(next);
+    onUpdateCardFields?.(next);
+  };
+  const toggleCardField = (field: keyof HabitCardFields) => {
+    soundEngine.playPop();
+    updateCardFields({
+      ...effectiveCardFields,
+      [field]: !effectiveCardFields[field],
+    });
+  };
+  const allHabitFieldsVisible = Object.values(effectiveCardFields).every(Boolean);
+  const allHabitFieldsHidden = Object.values(effectiveCardFields).every((v) => !v);
   const isFa = language === 'fa';
   const todayStr = getTodayKey();
   const [selectedDate, setSelectedDate] = useState<string>(todayStr);
   const [showAllHabits, setShowAllHabits] = useState<boolean>(false);
 
+  const [isAddChooserOpen, setIsAddChooserOpen] = useState(false);
+  const [isVoiceAddOpen, setIsVoiceAddOpen] = useState(false);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [manualDraft, setManualDraft] = useState<Partial<Habit> | null>(null);
   const [editingHabit, setEditingHabit] = useState<Habit | null>(null);
   const [selectedHabitForUnstick, setSelectedHabitForUnstick] = useState<Habit | null>(null);
   const [generatingFallbackHabitId, setGeneratingFallbackHabitId] = useState<string | null>(null);
@@ -64,12 +99,34 @@ export const HabitTracker: React.FC<HabitTrackerProps> = ({
   const [isFilterExpanded, setIsFilterExpanded] = useState(false);
   const [expandedHabitIds, setExpandedHabitIds] = useState<Set<string>>(new Set());
 
-  // Listen for unified FAB click from App
+  const effectivePrefs: UserPreferences = useMemo(
+    () =>
+      prefs || {
+        ...storage.getPreferences(),
+        currentEnergy,
+        language,
+      },
+    [prefs, currentEnergy, language]
+  );
+
+  // Keep FAB hidden whenever any chooser/add/edit modal is open
+  useEffect(() => {
+    const anyModalOpen =
+      isAddChooserOpen ||
+      isVoiceAddOpen ||
+      isAddModalOpen ||
+      Boolean(editingHabit);
+    window.dispatchEvent(
+      new CustomEvent('app:modal-state-change', { detail: { isOpen: anyModalOpen } })
+    );
+  }, [isAddChooserOpen, isVoiceAddOpen, isAddModalOpen, editingHabit]);
+
+  // Listen for unified FAB click from App -> open two-option chooser
   useEffect(() => {
     const handleFabClick = (e: Event) => {
       const customEvent = e as CustomEvent;
       if (!customEvent.detail || customEvent.detail.section === 'habits') {
-        setIsAddModalOpen(true);
+        setIsAddChooserOpen(true);
       }
     };
     window.addEventListener('app:fab-clicked', handleFabClick);
@@ -486,6 +543,90 @@ export const HabitTracker: React.FC<HabitTrackerProps> = ({
                       .replace('{total}', language === 'fa' ? toPersianDigits(habits.length) : String(habits.length))}
                   </div>
                 </div>
+
+                {/* Row 3: Card Field Visibility Controls */}
+                <div className="pt-2.5 border-t border-[#DCEAD4]/70 dark:border-[#263722]/70 flex flex-wrap items-center justify-between gap-2.5">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="text-[11px] font-bold text-[#485B44] dark:text-[#9EB598] me-1 inline-flex items-center gap-1">
+                      <Eye className="w-3.5 h-3.5 text-[#3B7E10] dark:text-[#80D141]" />
+                      <span>{t('cardFields.title')}:</span>
+                    </span>
+
+                    {(
+                      [
+                        { key: 'energy', label: t('cardFields.energy') },
+                        { key: 'time', label: t('cardFields.time') },
+                        { key: 'schedule', label: t('cardFields.schedule') },
+                        { key: 'stats', label: t('cardFields.stats') },
+                      ] as { key: keyof HabitCardFields; label: string }[]
+                    ).map((item) => {
+                      const isShown = effectiveCardFields[item.key];
+                      return (
+                        <button
+                          key={item.key}
+                          type="button"
+                          onClick={() => toggleCardField(item.key)}
+                          aria-pressed={isShown}
+                          className={`px-2.5 py-1 rounded-full text-xs font-bold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-all cursor-pointer ${
+                            isShown
+                              ? 'bg-[#80D141] text-[#0F2600] shadow-2xs'
+                              : 'bg-[#EDF6E8] dark:bg-[#1C281A] text-[#485B44] dark:text-[#9EB598] border border-[#DCEAD4] dark:border-[#263722] opacity-80 hover:opacity-100'
+                          }`}
+                        >
+                          {isShown ? (
+                            <Eye className="w-3 h-3 shrink-0" />
+                          ) : (
+                            <EyeOff className="w-3 h-3 shrink-0 opacity-65" />
+                          )}
+                          <span>{item.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        soundEngine.playPop();
+                        updateCardFields({
+                          energy: true,
+                          time: true,
+                          schedule: true,
+                          stats: true,
+                        });
+                      }}
+                      disabled={allHabitFieldsVisible}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                        allHabitFieldsVisible
+                          ? 'text-[#3B7E10] dark:text-[#80D141] bg-[#E8F8D8] dark:bg-[#1E3800]'
+                          : 'text-[#485B44] dark:text-[#9EB598] hover:bg-[#EDF6E8] dark:hover:bg-[#1C281A]'
+                      }`}
+                    >
+                      {t('cardFields.showAll')}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        soundEngine.playPop();
+                        updateCardFields({
+                          energy: false,
+                          time: false,
+                          schedule: false,
+                          stats: false,
+                        });
+                      }}
+                      disabled={allHabitFieldsHidden}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                        allHabitFieldsHidden
+                          ? 'text-[#3B7E10] dark:text-[#80D141] bg-[#E8F8D8] dark:bg-[#1E3800]'
+                          : 'text-[#485B44] dark:text-[#9EB598] hover:bg-[#EDF6E8] dark:hover:bg-[#1C281A]'
+                      }`}
+                    >
+                      {t('cardFields.minimal')}
+                    </button>
+                  </div>
+                </div>
               </div>
             </motion.div>
           )}
@@ -539,6 +680,19 @@ export const HabitTracker: React.FC<HabitTrackerProps> = ({
                 const habitEnergyMeta = ENERGY_LEVELS.find((l) => l.id === habit.energyCost) || ENERGY_LEVELS[0];
                 const repeatDaysBadge = formatActiveDaysLabel(habit.activeDays);
 
+                const showEnergyInSummary = effectiveCardFields.energy;
+                const showTimeInSummary = effectiveCardFields.time && Boolean(habit.time || habit.durationMinutes);
+                const showScheduleInSummary = effectiveCardFields.schedule && Boolean(repeatDaysBadge);
+                const showStatsInSummary = effectiveCardFields.stats;
+                const hasSummaryMetaRow =
+                  showEnergyInSummary || showTimeInSummary || showScheduleInSummary || showStatsInSummary;
+
+                const hiddenEnergy = !effectiveCardFields.energy;
+                const hiddenTime = !effectiveCardFields.time && Boolean(habit.time || habit.durationMinutes);
+                const hiddenSchedule = !effectiveCardFields.schedule && Boolean(repeatDaysBadge);
+                const hiddenStats = !effectiveCardFields.stats;
+                const isExpanded = expandedHabitIds.has(habit.id);
+
                 return (
                   <motion.div
                     key={habit.id}
@@ -546,7 +700,9 @@ export const HabitTracker: React.FC<HabitTrackerProps> = ({
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
                     onClick={() => toggleExpandHabit(habit.id)}
-                    className={`group relative p-4 rounded-2xl border transition-all duration-200 cursor-pointer select-none ${
+                    className={`group relative p-4 rounded-2xl border transition-all duration-200 cursor-pointer select-none flex flex-col ${
+                      !isExpanded ? 'justify-center' : ''
+                    } ${
                       isCompletedOnDate
                         ? 'bg-[#E1F6D0] dark:bg-[#1B3618] border-[#72C833] dark:border-[#529E25] shadow-xs'
                         : 'bg-white dark:bg-[#182316] border-[#DCEAD4] dark:border-[#263722] hover:border-[#80D141]/50'
@@ -555,7 +711,7 @@ export const HabitTracker: React.FC<HabitTrackerProps> = ({
                     <div className="flex items-center justify-between gap-3">
                       
                       {/* Left: Checkbox & Info */}
-                      <div className="flex items-start sm:items-center gap-3.5 flex-1 min-w-0">
+                      <div className={`flex gap-3.5 flex-1 min-w-0 ${hasSummaryMetaRow ? 'items-start sm:items-center' : 'items-center'}`}>
                         {/* Expressive Checkbox */}
                         <motion.button
                           whileHover={{ scale: 1.08 }}
@@ -564,7 +720,7 @@ export const HabitTracker: React.FC<HabitTrackerProps> = ({
                             e.stopPropagation();
                             handleToggleHabit(habit.id);
                           }}
-                          className={`w-9 h-9 shrink-0 mt-0.5 sm:mt-0 rounded-xl flex items-center justify-center transition-all ${
+                          className={`w-9 h-9 shrink-0 ${hasSummaryMetaRow ? 'mt-0.5 sm:mt-0' : ''} rounded-xl flex items-center justify-center transition-all ${
                             isCompletedOnDate
                               ? 'bg-[#80D141] text-[#0F2600] shadow-md font-bold'
                               : 'bg-[#EDF6E8] dark:bg-[#202E1E] text-[#3B7E10] dark:text-[#A2EB68] hover:bg-[#DDF4CD] border border-[#DCEAD4] dark:border-[#263722]'
@@ -583,51 +739,73 @@ export const HabitTracker: React.FC<HabitTrackerProps> = ({
                             {habit.title}
                           </h4>
 
-                          <div className="flex items-center gap-1.5 flex-wrap mt-1">
-                            {/* Energy Badge */}
-                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full inline-flex items-center gap-1 transition-colors shrink-0 ${
-                              isCompletedOnDate
-                                ? 'bg-[#CCEBB6] dark:bg-[#254A20] text-[#14300B] dark:text-[#CFF3B8]'
-                                : 'bg-[#E8F8D8] dark:bg-[#1E3800] text-[#1C3700] dark:text-[#A2EB68]'
-                            }`}>
-                              <span>{habitEnergyMeta.icon}</span>
-                              <span>{getEnergyLabel(habit.energyCost, language)}</span>
-                            </span>
-
-                            {/* Scheduled Time & Duration Badge */}
-                            {(habit.time || habit.durationMinutes) && (
-                              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full inline-flex items-center gap-1 shrink-0 ${
-                                isCompletedOnDate
-                                  ? 'bg-[#CCEBB6] dark:bg-[#254A20] text-[#14300B] dark:text-[#CFF3B8]'
-                                  : 'bg-[#EDF6E8] dark:bg-[#1E291C] text-[#3B7E10] dark:text-[#9DD97A] border border-[#DCEAD4] dark:border-[#263722]'
-                              }`}>
-                                <Clock className="w-2.5 h-2.5" />
-                                <span>
-                                  {habit.time ? (language === 'fa' ? toPersianDigits(habit.time) : habit.time) : ''}
-                                  {habit.time && habit.durationMinutes ? ' • ' : ''}
-                                  {habit.durationMinutes ? `${language === 'fa' ? toPersianDigits(habit.durationMinutes) : habit.durationMinutes} ${t('habits.mins', 'min')}` : ''}
+                          {hasSummaryMetaRow && (
+                            <div className="flex items-center gap-1.5 flex-wrap mt-1">
+                              {/* Energy Badge */}
+                              {showEnergyInSummary && (
+                                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full inline-flex items-center gap-1 transition-colors shrink-0 ${
+                                  isCompletedOnDate
+                                    ? 'bg-[#CCEBB6] dark:bg-[#254A20] text-[#14300B] dark:text-[#CFF3B8]'
+                                    : 'bg-[#E8F8D8] dark:bg-[#1E3800] text-[#1C3700] dark:text-[#A2EB68]'
+                                }`}>
+                                  <span>{habitEnergyMeta.icon}</span>
+                                  <span>{getEnergyLabel(habit.energyCost, language)}</span>
                                 </span>
-                              </span>
-                            )}
+                              )}
 
-                            {/* Specific Days of Week Badge */}
-                            {repeatDaysBadge && (
-                              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full inline-flex items-center gap-1 shrink-0 ${
-                                isCompletedOnDate
-                                  ? 'bg-[#CCEBB6] dark:bg-[#254A20] text-[#14300B] dark:text-[#CFF3B8]'
-                                  : 'bg-[#EDF6E8] dark:bg-[#1E291C] text-[#3B7E10] dark:text-[#9DD97A] border border-[#DCEAD4] dark:border-[#263722]'
-                              }`}>
-                                <CalendarDays className="w-2.5 h-2.5" />
-                                <span>{repeatDaysBadge}</span>
-                              </span>
-                            )}
+                              {/* Scheduled Time & Duration Badge */}
+                              {showTimeInSummary && (
+                                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full inline-flex items-center gap-1 shrink-0 ${
+                                  isCompletedOnDate
+                                    ? 'bg-[#CCEBB6] dark:bg-[#254A20] text-[#14300B] dark:text-[#CFF3B8]'
+                                    : 'bg-[#EDF6E8] dark:bg-[#1E291C] text-[#3B7E10] dark:text-[#9DD97A] border border-[#DCEAD4] dark:border-[#263722]'
+                                }`}>
+                                  <Clock className="w-2.5 h-2.5" />
+                                  <span>
+                                    {habit.time ? (language === 'fa' ? toPersianDigits(habit.time) : habit.time) : ''}
+                                    {habit.time && habit.durationMinutes ? ' • ' : ''}
+                                    {habit.durationMinutes ? `${language === 'fa' ? toPersianDigits(habit.durationMinutes) : habit.durationMinutes} ${t('habits.mins', 'min')}` : ''}
+                                  </span>
+                                </span>
+                              )}
 
-                          </div>
+                              {/* Specific Days of Week Badge */}
+                              {showScheduleInSummary && repeatDaysBadge && (
+                                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full inline-flex items-center gap-1 shrink-0 ${
+                                  isCompletedOnDate
+                                    ? 'bg-[#CCEBB6] dark:bg-[#254A20] text-[#14300B] dark:text-[#CFF3B8]'
+                                    : 'bg-[#EDF6E8] dark:bg-[#1E291C] text-[#3B7E10] dark:text-[#9DD97A] border border-[#DCEAD4] dark:border-[#263722]'
+                                }`}>
+                                  <CalendarDays className="w-2.5 h-2.5" />
+                                  <span>{repeatDaysBadge}</span>
+                                </span>
+                              )}
+
+                              {/* Optional Streak & Wins Summary */}
+                              {showStatsInSummary && (
+                                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full inline-flex items-center gap-1.5 shrink-0 tabular-nums ${
+                                  isCompletedOnDate
+                                    ? 'bg-[#CCEBB6] dark:bg-[#254A20] text-[#14300B] dark:text-[#CFF3B8]'
+                                    : 'bg-[#EDF6E8] dark:bg-[#1E291C] text-[#276007] dark:text-[#A2EB68] border border-[#DCEAD4] dark:border-[#263722]'
+                                }`}>
+                                  <span className="inline-flex items-center gap-0.5">
+                                    <Flame className="w-2.5 h-2.5 text-orange-500 fill-orange-500" />
+                                    {language === 'fa' ? toPersianDigits(habit.streakCount) : habit.streakCount}
+                                  </span>
+                                  <span aria-hidden="true" className="opacity-50">·</span>
+                                  <span className="inline-flex items-center gap-0.5">
+                                    <Award className="w-2.5 h-2.5 text-amber-500" />
+                                    {language === 'fa' ? toPersianDigits(habit.totalCompletions) : habit.totalCompletions}
+                                  </span>
+                                </span>
+                              )}
+                            </div>
+                          )}
                         </div>
                       </div>
 
                       {/* Right: Expand / Collapse Down Arrow */}
-                      <div className="shrink-0 self-start sm:self-center mt-1 sm:mt-0">
+                      <div className={`shrink-0 ${hasSummaryMetaRow ? 'self-start sm:self-center mt-1 sm:mt-0' : 'self-center'}`}>
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
@@ -638,8 +816,8 @@ export const HabitTracker: React.FC<HabitTrackerProps> = ({
                               ? 'bg-[#EDF6E8] dark:bg-[#202E1E] text-[#151E14] dark:text-[#E8F2E4]'
                               : 'text-[#485B44] dark:text-[#9EB598] hover:bg-[#EDF6E8] dark:hover:bg-[#202E1E] hover:text-[#151E14] dark:hover:text-[#E8F2E4]'
                           }`}
-                          title={expandedHabitIds.has(habit.id) ? t('common.close') : t('habits.filters')}
-                          aria-label={expandedHabitIds.has(habit.id) ? t('common.close') : t('habits.filters')}
+                          title={expandedHabitIds.has(habit.id) ? t('habits.hideDetails') : t('habits.showDetails')}
+                          aria-label={expandedHabitIds.has(habit.id) ? t('habits.hideDetails') : t('habits.showDetails')}
                         >
                           <ChevronDown
                             className={`w-4 h-4 transition-transform duration-200 ${
@@ -663,22 +841,60 @@ export const HabitTracker: React.FC<HabitTrackerProps> = ({
                           className="overflow-hidden cursor-default"
                         >
                           <div className="mt-3 pt-3 border-t border-[#DCEAD4] dark:border-[#263722] space-y-2.5">
-                            {/* Streak & Lifetime wins */}
-                            <div className={`flex items-center gap-3 text-[11px] font-medium transition-colors ${
-                              isCompletedOnDate
-                                ? 'text-[#2D5221] dark:text-[#9EC992]'
-                                : 'text-[#485B44] dark:text-[#9EB598]'
-                            }`}>
-                              <span className="flex items-center gap-1 font-bold text-[#276007] dark:text-[#A2EB68]">
-                                <Flame className="w-3.5 h-3.5 text-orange-500 fill-orange-500" />
-                                {t('habits.dayStreak').replace('{count}', language === 'fa' ? toPersianDigits(habit.streakCount) : String(habit.streakCount))}
-                              </span>
-                              <span>•</span>
-                              <span className="flex items-center gap-1 font-semibold">
-                                <Award className="w-3.5 h-3.5 text-amber-500" />
-                                {t('habits.totalWins').replace('{count}', language === 'fa' ? toPersianDigits(habit.totalCompletions) : String(habit.totalCompletions))}
-                              </span>
-                            </div>
+                            {/* Hidden Card Fields Revealed on Expand */}
+                            {(hiddenEnergy || hiddenTime || hiddenSchedule) && (
+                              <div className="flex items-center gap-2 flex-wrap text-xs font-medium text-[#485B44] dark:text-[#9EB598]">
+                                {hiddenEnergy && (
+                                  <span className="inline-flex items-center gap-1 font-semibold text-[#1C3700] dark:text-[#A2EB68]">
+                                    <span>{habitEnergyMeta.icon}</span>
+                                    <span>{getEnergyLabel(habit.energyCost, language)}</span>
+                                  </span>
+                                )}
+                                {hiddenEnergy && (hiddenTime || hiddenSchedule) && (
+                                  <span aria-hidden="true" className="opacity-50">·</span>
+                                )}
+                                {hiddenTime && (
+                                  <span className="inline-flex items-center gap-1 font-semibold tabular-nums text-[#3B7E10] dark:text-[#9DD97A]">
+                                    <Clock className="w-3 h-3" />
+                                    <span>
+                                      {habit.time ? (language === 'fa' ? toPersianDigits(habit.time) : habit.time) : ''}
+                                      {habit.time && habit.durationMinutes ? ' • ' : ''}
+                                      {habit.durationMinutes
+                                        ? `${language === 'fa' ? toPersianDigits(habit.durationMinutes) : habit.durationMinutes} ${t('habits.mins', 'min')}`
+                                        : ''}
+                                    </span>
+                                  </span>
+                                )}
+                                {hiddenTime && hiddenSchedule && (
+                                  <span aria-hidden="true" className="opacity-50">·</span>
+                                )}
+                                {hiddenSchedule && repeatDaysBadge && (
+                                  <span className="inline-flex items-center gap-1 font-semibold text-[#3B7E10] dark:text-[#9DD97A]">
+                                    <CalendarDays className="w-3 h-3" />
+                                    <span>{repeatDaysBadge}</span>
+                                  </span>
+                                )}
+                              </div>
+                            )}
+
+                            {/* Streak & Lifetime wins (shown here when hidden from summary header) */}
+                            {hiddenStats && (
+                              <div className={`flex items-center gap-3 text-[11px] font-medium transition-colors tabular-nums ${
+                                isCompletedOnDate
+                                  ? 'text-[#2D5221] dark:text-[#9EC992]'
+                                  : 'text-[#485B44] dark:text-[#9EB598]'
+                              }`}>
+                                <span className="flex items-center gap-1 font-bold text-[#276007] dark:text-[#A2EB68]">
+                                  <Flame className="w-3.5 h-3.5 text-orange-500 fill-orange-500" />
+                                  {t('habits.dayStreak').replace('{count}', language === 'fa' ? toPersianDigits(habit.streakCount) : String(habit.streakCount))}
+                                </span>
+                                <span>•</span>
+                                <span className="flex items-center gap-1 font-semibold">
+                                  <Award className="w-3.5 h-3.5 text-amber-500" />
+                                  {t('habits.totalWins').replace('{count}', language === 'fa' ? toPersianDigits(habit.totalCompletions) : String(habit.totalCompletions))}
+                                </span>
+                              </div>
+                            )}
 
                             {/* Actions Bar: 10-Second Fallback & Management */}
                             <div className="flex items-center justify-between flex-wrap gap-2 pt-0.5">
@@ -790,13 +1006,50 @@ export const HabitTracker: React.FC<HabitTrackerProps> = ({
         );
       })}
 
+      {/* Two-Option Add Mode Chooser */}
+      <AddEntryModeChooser
+        isOpen={isAddChooserOpen}
+        mode="habit"
+        onClose={() => setIsAddChooserOpen(false)}
+        onSelectManual={() => {
+          setIsAddChooserOpen(false);
+          setManualDraft(null);
+          setIsAddModalOpen(true);
+        }}
+        onSelectVoice={() => {
+          setIsAddChooserOpen(false);
+          setIsVoiceAddOpen(true);
+        }}
+      />
+
+      {/* Voice-Assisted Habit Modal */}
+      <VoiceEntryModal
+        isOpen={isVoiceAddOpen}
+        mode="habit"
+        onClose={() => setIsVoiceAddOpen(false)}
+        prefs={effectivePrefs}
+        onSaveHabit={(newHabit) => {
+          onUpdateHabits([...habits, newHabit]);
+        }}
+        onOpenManualHabit={(draft) => {
+          setIsVoiceAddOpen(false);
+          setManualDraft(draft);
+          setIsAddModalOpen(true);
+        }}
+        onOpenSettings={onOpenSettings}
+      />
+
       {/* Add Habit Modal */}
       <AddHabitModal
         isOpen={isAddModalOpen}
-        onClose={() => setIsAddModalOpen(false)}
+        onClose={() => {
+          setIsAddModalOpen(false);
+          setManualDraft(null);
+        }}
         onAddHabit={(newHabit) => {
           onUpdateHabits([...habits, newHabit]);
         }}
+        initialDraft={manualDraft}
       />
 
       {/* Edit Habit Modal */}

@@ -161,17 +161,17 @@ export const GroundingModal: React.FC<GroundingModalProps> = ({ isOpen, onClose 
             type="button"
             onClick={onClose}
             aria-label={t('common.back', 'Back')}
-            className="p-2 -ms-2 rounded-xl text-[#485B44] dark:text-[#9EB598] hover:bg-[#DCEAD4] dark:hover:bg-[#2A3D26] transition-colors flex items-center gap-1.5 font-medium text-sm cursor-pointer"
+            className="min-h-[44px] min-w-[44px] px-2.5 -ms-2 rounded-xl text-[#485B44] dark:text-[#9EB598] hover:bg-[#DCEAD4] dark:hover:bg-[#2A3D26] transition-colors flex items-center justify-center gap-1.5 font-medium text-sm cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#80D141]"
           >
             <ArrowLeft className="w-5 h-5 rtl:rotate-180" />
             <span className="hidden sm:inline">{t('common.back', 'Back')}</span>
           </button>
-          <div className="flex items-center gap-2.5">
+          <div className="flex items-center gap-2.5 min-w-0">
             <div className="w-10 h-10 rounded-2xl bg-[#80D141] text-[#0F2600] flex items-center justify-center shadow-xs shrink-0">
               <HeartHandshake className="w-5 h-5" />
             </div>
-            <div>
-              <h2 className="font-display text-base sm:text-lg font-bold text-[#151E14] dark:text-[#E8F2E4]">
+            <div className="min-w-0">
+              <h2 className="font-display text-base sm:text-lg font-bold text-[#151E14] dark:text-[#E8F2E4] truncate">
                 {t('grounding.title', 'Nervous System Grounding')}
               </h2>
               <p className="text-xs text-[#485B44] dark:text-[#9EB598] font-medium">
@@ -186,42 +186,58 @@ export const GroundingModal: React.FC<GroundingModalProps> = ({ isOpen, onClose 
       <div className="flex-1 overflow-y-auto px-4 sm:px-8 py-6 sm:py-8 flex flex-col items-center">
         <div className="w-full max-w-2xl space-y-6">
           {/* Tab Toggle - 3 Options: Box Breathing, 4-7-8 Breathing, Sensory Reset */}
-          <div className="grid grid-cols-3 rounded-2xl bg-[#EDF6E8] dark:bg-[#1C281A] p-1.5 gap-1.5 border border-[#DCEAD4] dark:border-[#263722] shadow-xs">
+          <div
+            role="tablist"
+            aria-label={t('grounding.title', 'Nervous System Grounding')}
+            className="flex items-center gap-1.5 overflow-x-auto no-scrollbar sm:grid sm:grid-cols-3 rounded-2xl bg-[#EDF6E8] dark:bg-[#1C281A] p-1.5 border border-[#DCEAD4] dark:border-[#263722] shadow-xs"
+          >
             <button
-              onClick={() => {
+              type="button"
+              role="tab"
+              aria-selected={tab === 'box'}
+              onClick={(e) => {
                 setTab('box');
                 soundEngine.playPop();
+                e.currentTarget.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
               }}
-              className={`py-2.5 px-2 rounded-xl text-xs sm:text-sm font-bold transition-all truncate text-center ${
+              className={`min-h-[44px] flex-1 min-w-max py-2.5 px-3 rounded-xl text-xs sm:text-sm font-bold transition-all whitespace-nowrap text-center cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#80D141] ${
                 tab === 'box'
                   ? 'bg-[#80D141] text-[#0F2600] shadow-xs'
-                  : 'text-[#485B44] dark:text-[#9EB598] hover:text-[#151E14]'
+                  : 'text-[#485B44] dark:text-[#9EB598] hover:text-[#151E14] dark:hover:text-[#E8F2E4]'
               }`}
             >
               {t('grounding.tabBox', '📦 Box (4-4-4-4)')}
             </button>
             <button
-              onClick={() => {
+              type="button"
+              role="tab"
+              aria-selected={tab === 'relax_478'}
+              onClick={(e) => {
                 setTab('relax_478');
                 soundEngine.playPop();
+                e.currentTarget.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
               }}
-              className={`py-2.5 px-2 rounded-xl text-xs sm:text-sm font-bold transition-all truncate text-center ${
+              className={`min-h-[44px] flex-1 min-w-max py-2.5 px-3 rounded-xl text-xs sm:text-sm font-bold transition-all whitespace-nowrap text-center cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#80D141] ${
                 tab === 'relax_478'
                   ? 'bg-[#80D141] text-[#0F2600] shadow-xs'
-                  : 'text-[#485B44] dark:text-[#9EB598] hover:text-[#151E14]'
+                  : 'text-[#485B44] dark:text-[#9EB598] hover:text-[#151E14] dark:hover:text-[#E8F2E4]'
               }`}
             >
               {t('grounding.tabRelax', '🫁 4-7-8 Relax')}
             </button>
             <button
-              onClick={() => {
+              type="button"
+              role="tab"
+              aria-selected={tab === 'sensory'}
+              onClick={(e) => {
                 setTab('sensory');
                 soundEngine.playPop();
+                e.currentTarget.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
               }}
-              className={`py-2.5 px-2 rounded-xl text-xs sm:text-sm font-bold transition-all truncate text-center ${
+              className={`min-h-[44px] flex-1 min-w-max py-2.5 px-3 rounded-xl text-xs sm:text-sm font-bold transition-all whitespace-nowrap text-center cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#80D141] ${
                 tab === 'sensory'
                   ? 'bg-[#80D141] text-[#0F2600] shadow-xs'
-                  : 'text-[#485B44] dark:text-[#9EB598] hover:text-[#151E14]'
+                  : 'text-[#485B44] dark:text-[#9EB598] hover:text-[#151E14] dark:hover:text-[#E8F2E4]'
               }`}
             >
               {t('grounding.tabSensory', '🌿 5-4-3-2-1 Reset')}

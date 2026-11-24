@@ -346,7 +346,7 @@ export const Planner: React.FC<PlannerProps> = ({
     }, 4500);
   };
 
-  // Copy full prompt formatted for external chatbots (ChatGPT, Claude, Gemini, DeepSeek, etc.)
+  // Copy full prompt formatted for external chatbots (ChatGPT, Claude, DeepSeek, etc.)
   const handleCopyPlanningPrompt = async () => {
     soundEngine.playGentleChime();
     const activeChronotype = prefs.chronotype || 'balanced';
@@ -566,7 +566,7 @@ export const Planner: React.FC<PlannerProps> = ({
               <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
               <div className="flex-1 leading-relaxed">
                 <span className="font-medium">{errorMessage}</span>
-                {(/quota|api key|کلید|تنظیمات/i.test(errorMessage) || !prefs.geminiApiKey?.trim()) && (
+                {(/quota|api key|کلید|تنظیمات/i.test(errorMessage) || !hasActiveAiKey(prefs)) && (
                   <button
                     id="btn-planner-go-to-settings"
                     type="button"
@@ -984,7 +984,7 @@ export const Planner: React.FC<PlannerProps> = ({
                     <Sparkles className="w-4 h-4 text-[#3B7E10] dark:text-[#80D141] shrink-0 mt-0.5" />
                     <div className="flex-1 leading-relaxed">
                       <span className="font-bold">
-                        {t('planner.noKeyChatbotAlternative', 'No API key? You can copy the planning prompt to use ChatGPT, Claude, or Gemini for free, then import the response here.')}
+                        {t('planner.noKeyChatbotAlternative', 'No API key? You can copy the planning prompt to use ChatGPT, Claude, or DeepSeek for free, then import the response here.')}
                       </span>{' '}
                       <button
                         type="button"
@@ -1234,7 +1234,7 @@ export const Planner: React.FC<PlannerProps> = ({
                       {t('planner.importModalTitle', 'Import Schedule from AI Chatbot')}
                     </h3>
                     <p className="text-[11px] text-[#556D50] dark:text-[#8EA887]">
-                      {t('planner.importModalDesc', 'Paste the response from ChatGPT, Claude, Gemini, or any AI tool to instantly load your schedule into Lerni.')}
+                      {t('planner.importModalDesc', 'Paste the response from ChatGPT, Claude, DeepSeek, or any AI tool to instantly load your schedule into Lerni.')}
                     </p>
                   </div>
                 </div>
@@ -1260,7 +1260,7 @@ export const Planner: React.FC<PlannerProps> = ({
                   </div>
                   <ol className="list-decimal list-inside space-y-0.5 leading-relaxed">
                     <li>{language === 'fa' ? 'روی دکمه «کپی پرامپت» کلیک کنید تا تمام تنظیمات کپی شود.' : 'Click "Copy Prompt" in the planning settings.'}</li>
-                    <li>{language === 'fa' ? 'آن را در چت‌جی‌پی‌تی (ChatGPT)، کلود یا هر چت‌بات رایگان پیست کنید.' : 'Paste it into ChatGPT, Claude, Gemini, or DeepSeek.'}</li>
+                    <li>{language === 'fa' ? 'آن را در چت‌جی‌پی‌تی (ChatGPT)، کلود یا هر چت‌بات رایگان پیست کنید.' : 'Paste it into ChatGPT, Claude, or DeepSeek.'}</li>
                     <li>{language === 'fa' ? 'پاسخ یا کد JSON دریافتی را کپی کرده و در کادر زیر قرار دهید.' : 'Copy the chatbot response or JSON block and paste it below.'}</li>
                   </ol>
                 </div>

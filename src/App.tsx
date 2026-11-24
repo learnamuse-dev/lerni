@@ -270,6 +270,9 @@ export default function App() {
                     categories={prefs.journalCategories}
                     onOpenSettings={handleOpenSettings}
                     hasApiKey={hasActiveAiKey(prefs)}
+                    cardFields={prefs.journalCardFields}
+                    onUpdateCardFields={(journalCardFields) => handleUpdatePrefs({ journalCardFields })}
+                    prefs={prefs}
                   />
                 </motion.div>
               )}
@@ -288,6 +291,8 @@ export default function App() {
                     currentEnergy={prefs.currentEnergy}
                     prefs={prefs}
                     onOpenSettings={handleOpenSettings}
+                    cardFields={prefs.habitCardFields}
+                    onUpdateCardFields={(habitCardFields) => handleUpdatePrefs({ habitCardFields })}
                   />
                 </motion.div>
               )}

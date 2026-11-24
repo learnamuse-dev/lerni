@@ -155,10 +155,9 @@ export const DEFAULT_FOCUS_TAB_ORDER: FocusTab[] = [
   'tracker',
 ];
 
-export type AiProvider = 'gemini' | 'openrouter' | 'custom';
+export type AiProvider = 'openrouter' | 'custom';
 
-export const DEFAULT_GEMINI_MODEL = 'gemini-3.1-flash-lite';
-export const DEFAULT_OPENROUTER_MODEL = 'google/gemini-2.5-flash';
+export const DEFAULT_OPENROUTER_MODEL = 'nvidia/nemotron-3.5-lightning:free';
 export const DEFAULT_CUSTOM_OPENAI_BASE_URL = 'http://localhost:11434/v1';
 export const DEFAULT_CUSTOM_OPENAI_MODEL = 'llama3.2';
 
@@ -272,21 +271,41 @@ export const CUSTOM_OPENAI_PRESETS: CustomOpenAiPreset[] = [
   },
 ];
 
-export const GEMINI_MODEL_PRESETS: AiModelPreset[] = [
-  { id: 'gemini-flash-lite-latest', name: 'Flash-Lite' },
-  { id: 'gemini-flash-latest', name: 'Flash' },
-  { id: 'gemma-4-26b-a4b-it', name: 'Gemma 4 26B' },
-  { id: 'gemma-4-31b-it', name: 'Gemma 4 31B' },
+export const OPENROUTER_MODEL_PRESETS: AiModelPreset[] = [
+  { id: 'nvidia/nemotron-3.5-lightning:free', name: 'Nemotron 3.5 Lightning' },
+  { id: 'nvidia/nemotron-3.5-super-vl:free', name: 'Nemotron 3.5 Super VL' },
+  { id: 'google/gemma-4-26b-a4b-it:free', name: 'Gemma 4 26B' },
 ];
 
-export const OPENROUTER_MODEL_PRESETS: AiModelPreset[] = [
-  { id: 'liquid/lfm-2.5-2.6b:free', name: 'LFM 2.5' },
-  { id: 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free', name: 'Nemotron 3 Nano' },
-  { id: 'nvidia/nemotron-3.5-lightning:free', name: 'Nemotron 3.5' },
-  { id: 'nvidia/nemotron-3-super-120b-a12b:free', name: 'Nemotron 3 Super' },
-  { id: 'nvidia/nemotron-3-ultra-550b-a55b:free', name: 'Nemotron 3 Ultra' },
-  { id: 'thinkingmachines/inkling-small:free', name: 'Inkling Small' },
-];
+export interface JournalCardFields {
+  energy: boolean;
+  time: boolean;
+  category: boolean;
+  priority: boolean;
+  steps: boolean;
+}
+
+export interface HabitCardFields {
+  energy: boolean;
+  time: boolean;
+  schedule: boolean;
+  stats: boolean;
+}
+
+export const DEFAULT_JOURNAL_CARD_FIELDS: JournalCardFields = {
+  energy: true,
+  time: true,
+  category: true,
+  priority: true,
+  steps: true,
+};
+
+export const DEFAULT_HABIT_CARD_FIELDS: HabitCardFields = {
+  energy: true,
+  time: true,
+  schedule: true,
+  stats: false,
+};
 
 export interface UserPreferences {
   userName: string;
@@ -299,21 +318,20 @@ export interface UserPreferences {
   soundAlerts: boolean;
   soundEffectsEnabled: boolean; // Master toggle for all UI audio effects & clicks
   journalCategories?: string[]; // Custom list of Journal tags/categories
+  journalCardFields?: JournalCardFields; // Which fields appear collapsed on Journal cards
+  habitCardFields?: HabitCardFields; // Which fields appear collapsed on Habit cards
   navOrder?: NavSection[]; // Custom ordered list of navigation sections
   focusTabOrder?: FocusTab[]; // Custom ordered list of Timer tabs ('focus' and 'tracker')
   theme: 'light' | 'dark';
   accentColor: string; // e.g. '#80D141'
   accentColorName?: string;
-  aiProvider?: AiProvider; // 'gemini' | 'openrouter' | 'custom'
-  geminiApiKey?: string; // Custom user-entered Gemini API key
-  geminiModel?: string; // Selected Gemini model ID
+  aiProvider?: AiProvider; // 'openrouter' | 'custom'
   openRouterApiKey?: string; // Custom user-entered OpenRouter API key
   openRouterModel?: string; // Selected OpenRouter model ID
   customOpenAiBaseUrl?: string; // Custom OpenAI-compatible Base URL
   customOpenAiApiKey?: string; // Custom user-entered API key (optional for local)
   customOpenAiModel?: string; // Selected Model ID
   customOpenAiApiVersion?: string; // Optional API version (e.g. for Azure)
-  useSharedFreeKey?: boolean; // Whether the user uses the shared community free API key
   plannerCustomInstructions?: string; // Persistent custom instructions for smart planner
   customFocusPresets?: FocusTimerPreset[]; // User custom focus timer presets
 }
@@ -341,10 +359,7 @@ export function isLocalEndpoint(url?: string): boolean {
 }
 
 export function hasActiveAiKey(prefs: UserPreferences): boolean {
-  const provider: AiProvider = prefs.aiProvider || 'gemini';
-  if (provider === 'openrouter') {
-    return Boolean(prefs.openRouterApiKey && prefs.openRouterApiKey.trim() !== '');
-  }
+  const provider: AiProvider = prefs.aiProvider === 'custom' ? 'custom' : 'openrouter';
   if (provider === 'custom') {
     const baseUrl = prefs.customOpenAiBaseUrl?.trim() || (typeof import.meta !== 'undefined' ? import.meta.env?.VITE_OPENAI_COMPATIBLE_BASE_URL : '') || '';
     const key = prefs.customOpenAiApiKey?.trim() || (typeof import.meta !== 'undefined' ? import.meta.env?.VITE_OPENAI_COMPATIBLE_API_KEY : '') || '';
@@ -354,7 +369,7 @@ export function hasActiveAiKey(prefs: UserPreferences): boolean {
     }
     return Boolean(key || baseUrl);
   }
-  return Boolean(prefs.geminiApiKey && prefs.geminiApiKey.trim() !== '');
+  return Boolean(prefs.openRouterApiKey && prefs.openRouterApiKey.trim() !== '');
 }
 
 export type Chronotype = 'morning' | 'afternoon' | 'evening' | 'balanced';

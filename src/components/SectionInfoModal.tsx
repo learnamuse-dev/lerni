@@ -116,7 +116,7 @@ const SECTION_GUIDES: Record<SectionInfoType, {
     tips: [
       {
         title: 'AI Energy Optimization ✨',
-        desc: 'Gemini analyzes your logged Journal tasks, habits, and real-time energy levels to build an optimized daily blueprint.',
+        desc: 'AI analyzes your logged Journal tasks, habits, and real-time energy levels to build an optimized daily blueprint.',
         icon: '⚡'
       },
       {

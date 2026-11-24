@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Plus, Sparkles, Clock, Zap, ArrowLeft, CalendarDays } from 'lucide-react';
 import { Habit, EnergyLevel, TimeBucket, ENERGY_LEVELS } from '../../types';
@@ -11,11 +11,12 @@ interface AddHabitModalProps {
   isOpen: boolean;
   onClose: () => void;
   onAddHabit: (habit: Habit) => void;
+  initialDraft?: Partial<Habit> | null;
 }
 
 const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];
 
-export const AddHabitModal: React.FC<AddHabitModalProps> = ({ isOpen, onClose, onAddHabit }) => {
+export const AddHabitModal: React.FC<AddHabitModalProps> = ({ isOpen, onClose, onAddHabit, initialDraft }) => {
   const { t, language } = useI18n();
   const isFa = language === 'fa';
   const [title, setTitle] = useState('');
@@ -24,6 +25,25 @@ export const AddHabitModal: React.FC<AddHabitModalProps> = ({ isOpen, onClose, o
   const [durationMinutes, setDurationMinutes] = useState<string>('');
   const [activeDays, setActiveDays] = useState<number[]>(ALL_DAYS);
   const [energyCost, setEnergyCost] = useState<EnergyLevel>('low');
+  const [unstickTip, setUnstickTip] = useState<string | undefined>(undefined);
+  const wasOpenRef = useRef(false);
+
+  useEffect(() => {
+    if (isOpen && !wasOpenRef.current) {
+      setTitle(initialDraft?.title || '');
+      setTimeBucket(initialDraft?.timeBucket || 'morning');
+      setTargetTime(initialDraft?.time || '');
+      setDurationMinutes(initialDraft?.durationMinutes ? String(initialDraft.durationMinutes) : '');
+      setActiveDays(
+        initialDraft?.activeDays && initialDraft.activeDays.length > 0
+          ? initialDraft.activeDays
+          : ALL_DAYS
+      );
+      setEnergyCost(initialDraft?.energyCost || 'low');
+      setUnstickTip(initialDraft?.unstickTip);
+    }
+    wasOpenRef.current = isOpen;
+  }, [isOpen, initialDraft]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -101,6 +121,7 @@ export const AddHabitModal: React.FC<AddHabitModalProps> = ({ isOpen, onClose, o
       durationMinutes: parsedDuration && !isNaN(parsedDuration) && parsedDuration > 0 ? parsedDuration : undefined,
       activeDays: normalizedDays,
       energyCost,
+      unstickTip,
       color: '#80D141',
       createdAt: getTodayDateString(),
       completedDates: [],
@@ -114,6 +135,7 @@ export const AddHabitModal: React.FC<AddHabitModalProps> = ({ isOpen, onClose, o
     setTargetTime('');
     setDurationMinutes('');
     setActiveDays(ALL_DAYS);
+    setUnstickTip(undefined);
     onClose();
   };
 

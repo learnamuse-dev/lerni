@@ -27,6 +27,7 @@ interface AddBujoModalProps {
   currentEnergy?: EnergyLevel;
   categories?: string[];
   onOpenSettings?: () => void;
+  initialDraft?: Partial<BujoEntry> | null;
 }
 
 const TYPE_SYMBOLS: Record<BujoType, { symbol: string; typeKey: string; descKey: string }> = {
@@ -43,6 +44,7 @@ export const AddBujoModal: React.FC<AddBujoModalProps> = ({
   currentEnergy = 'low',
   categories,
   onOpenSettings,
+  initialDraft,
 }) => {
   const { t, language } = useI18n();
   const todayStr = getTodayKey();
@@ -58,23 +60,41 @@ export const AddBujoModal: React.FC<AddBujoModalProps> = ({
   const [category, setCategory] = useState<string>(availableCategories[0] || 'General');
 
   const inputRef = useRef<HTMLInputElement>(null);
+  const wasOpenRef = useRef(false);
 
-  // Sync defaultDate & category when opened
+  // Sync fields cleanly only when modal transitions to open
   useEffect(() => {
-    if (isOpen) {
-      setTargetDate(defaultDate || todayStr);
-      setTargetTime('');
-      setDurationMinutes('');
-      setContent('');
-      setIsPriority(false);
-      if (!availableCategories.includes(category)) {
+    if (isOpen && !wasOpenRef.current) {
+      setTargetDate(initialDraft?.date || defaultDate || todayStr);
+      setTargetTime(initialDraft?.time || '');
+      setDurationMinutes(initialDraft?.durationMinutes ? String(initialDraft.durationMinutes) : '');
+      setContent(initialDraft?.content || '');
+      setType(initialDraft?.type || 'task');
+      setEnergyCost(initialDraft?.energyCost || currentEnergy);
+      setIsPriority(Boolean(initialDraft?.isPriority));
+      const draftCat = initialDraft?.category;
+      if (draftCat && availableCategories.includes(draftCat)) {
+        setCategory(draftCat);
+      } else {
         setCategory(availableCategories[0] || 'General');
       }
       setTimeout(() => {
         inputRef.current?.focus();
       }, 100);
     }
-  }, [isOpen, defaultDate, todayStr, availableCategories]);
+    wasOpenRef.current = isOpen;
+  }, [isOpen, initialDraft, defaultDate, todayStr, currentEnergy, availableCategories]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [isOpen, onClose]);
 
   // Sync modal state with app for FAB animation
   useEffect(() => {

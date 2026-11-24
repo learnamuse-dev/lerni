@@ -24,9 +24,12 @@ import {
   CalendarDays,
   CalendarRange,
   ChevronDown,
-  X
+  X,
+  Eye,
+  EyeOff
 } from 'lucide-react';
-import { BujoEntry, BujoType, BujoStatus, EnergyLevel, ENERGY_LEVELS } from '../../types';
+import { BujoEntry, BujoType, BujoStatus, EnergyLevel, ENERGY_LEVELS, JournalCardFields, DEFAULT_JOURNAL_CARD_FIELDS, UserPreferences } from '../../types';
+import { storage } from '../../utils/storage';
 import { soundEngine } from '../../utils/audioSynth';
 import { 
   getTodayKey, 
@@ -41,6 +44,8 @@ import { EditBujoModal } from './EditBujoModal';
 import { MigrateOverdueModal } from './MigrateOverdueModal';
 import { UnstickModal, getLocalizedTaskTitle } from '../UnstickModal';
 import { MaterialExpressiveDatePicker } from '../common/MaterialExpressiveDatePicker';
+import { AddEntryModeChooser } from '../common/AddEntryModeChooser';
+import { VoiceEntryModal } from '../common/VoiceEntryModal';
 
 interface BulletJournalProps {
   entries: BujoEntry[];
@@ -50,6 +55,9 @@ interface BulletJournalProps {
   categories?: string[];
   onOpenSettings?: () => void;
   hasApiKey?: boolean;
+  cardFields?: JournalCardFields;
+  onUpdateCardFields?: (fields: JournalCardFields) => void;
+  prefs?: UserPreferences;
 }
 
 const TYPE_SYMBOLS: Record<BujoType, { symbol: string; label: string; icon: React.ReactNode }> = {
@@ -66,26 +74,78 @@ export const BulletJournal: React.FC<BulletJournalProps> = ({
   categories,
   onOpenSettings,
   hasApiKey = false,
+  cardFields,
+  onUpdateCardFields,
+  prefs,
 }) => {
   const { t, language } = useI18n();
+  const [localCardFields, setLocalCardFields] = useState<JournalCardFields>(cardFields || DEFAULT_JOURNAL_CARD_FIELDS);
+  useEffect(() => {
+    if (cardFields) {
+      setLocalCardFields(cardFields);
+    }
+  }, [cardFields]);
+
+  const effectiveCardFields = cardFields || localCardFields;
+  const updateCardFields = (next: JournalCardFields) => {
+    setLocalCardFields(next);
+    onUpdateCardFields?.(next);
+  };
+  const toggleCardField = (field: keyof JournalCardFields) => {
+    soundEngine.playPop();
+    updateCardFields({
+      ...effectiveCardFields,
+      [field]: !effectiveCardFields[field],
+    });
+  };
+  const allJournalFieldsVisible = Object.values(effectiveCardFields).every(Boolean);
+  const allJournalFieldsHidden = Object.values(effectiveCardFields).every((v) => !v);
   const todayStr = getTodayKey();
   const [selectedDate, setSelectedDate] = useState<string>(todayStr);
   const [journalView, setJournalView] = useState<'day' | 'calendar' | 'timeline'>('day');
   
   // Modals & Migration state
+  const [isAddChooserOpen, setIsAddChooserOpen] = useState(false);
+  const [isVoiceAddOpen, setIsVoiceAddOpen] = useState(false);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [manualDraft, setManualDraft] = useState<Partial<BujoEntry> | null>(null);
   const [editingEntry, setEditingEntry] = useState<BujoEntry | null>(null);
   const [unstickEntry, setUnstickEntry] = useState<BujoEntry | null>(null);
   const [isMigrateModalOpen, setIsMigrateModalOpen] = useState(false);
   const [migratingEntryId, setMigratingEntryId] = useState<string | null>(null);
   const [migrationNotice, setMigrationNotice] = useState<string | null>(null);
 
-  // Listen for unified FAB click from App
+  const effectivePrefs: UserPreferences = useMemo(
+    () =>
+      prefs || {
+        ...storage.getPreferences(),
+        currentEnergy,
+        language,
+        journalCategories: categories || storage.getPreferences().journalCategories,
+      },
+    [prefs, currentEnergy, language, categories]
+  );
+
+  // Keep FAB hidden whenever any add/edit modal is open
+  useEffect(() => {
+    const anyModalOpen =
+      isAddChooserOpen ||
+      isVoiceAddOpen ||
+      isAddModalOpen ||
+      Boolean(editingEntry) ||
+      Boolean(unstickEntry) ||
+      isMigrateModalOpen;
+    window.dispatchEvent(
+      new CustomEvent('app:modal-state-change', { detail: { isOpen: anyModalOpen } })
+    );
+  }, [isAddChooserOpen, isVoiceAddOpen, isAddModalOpen, editingEntry, unstickEntry, isMigrateModalOpen]);
+
+  // Listen for unified FAB click from App -> open two-option chooser
   useEffect(() => {
     const handleFabClick = (e: Event) => {
       const customEvent = e as CustomEvent;
       if (!customEvent.detail || customEvent.detail.section === 'journal') {
-        setIsAddModalOpen(true);
+        setIsAddChooserOpen(true);
       }
     };
     window.addEventListener('app:fab-clicked', handleFabClick);
@@ -527,6 +587,93 @@ export const BulletJournal: React.FC<BulletJournalProps> = ({
                     ))}
                   </div>
                 </div>
+
+                {/* Row 3: Card Field Visibility Controls */}
+                <div className="pt-2.5 border-t border-[#DCEAD4]/70 dark:border-[#263722]/70 flex flex-wrap items-center justify-between gap-2.5">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="text-[11px] font-bold text-[#485B44] dark:text-[#9EB598] me-1 inline-flex items-center gap-1">
+                      <Eye className="w-3.5 h-3.5 text-[#3B7E10] dark:text-[#80D141]" />
+                      <span>{t('cardFields.title')}:</span>
+                    </span>
+
+                    {(
+                      [
+                        { key: 'energy', label: t('cardFields.energy') },
+                        { key: 'time', label: t('cardFields.time') },
+                        { key: 'category', label: t('cardFields.category') },
+                        { key: 'priority', label: t('cardFields.priority') },
+                        { key: 'steps', label: t('cardFields.steps') },
+                      ] as { key: keyof JournalCardFields; label: string }[]
+                    ).map((item) => {
+                      const isShown = effectiveCardFields[item.key];
+                      return (
+                        <button
+                          key={item.key}
+                          type="button"
+                          onClick={() => toggleCardField(item.key)}
+                          aria-pressed={isShown}
+                          className={`px-2.5 py-1 rounded-full text-xs font-bold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-all cursor-pointer ${
+                            isShown
+                              ? 'bg-[#80D141] text-[#0F2600] shadow-2xs'
+                              : 'bg-[#EDF6E8] dark:bg-[#1C281A] text-[#485B44] dark:text-[#9EB598] border border-[#DCEAD4] dark:border-[#263722] opacity-80 hover:opacity-100'
+                          }`}
+                        >
+                          {isShown ? (
+                            <Eye className="w-3 h-3 shrink-0" />
+                          ) : (
+                            <EyeOff className="w-3 h-3 shrink-0 opacity-65" />
+                          )}
+                          <span>{item.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        soundEngine.playPop();
+                        updateCardFields({
+                          energy: true,
+                          time: true,
+                          category: true,
+                          priority: true,
+                          steps: true,
+                        });
+                      }}
+                      disabled={allJournalFieldsVisible}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                        allJournalFieldsVisible
+                          ? 'text-[#3B7E10] dark:text-[#80D141] bg-[#E8F8D8] dark:bg-[#1E3800]'
+                          : 'text-[#485B44] dark:text-[#9EB598] hover:bg-[#EDF6E8] dark:hover:bg-[#1C281A]'
+                      }`}
+                    >
+                      {t('cardFields.showAll')}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        soundEngine.playPop();
+                        updateCardFields({
+                          energy: false,
+                          time: false,
+                          category: false,
+                          priority: false,
+                          steps: false,
+                        });
+                      }}
+                      disabled={allJournalFieldsHidden}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                        allJournalFieldsHidden
+                          ? 'text-[#3B7E10] dark:text-[#80D141] bg-[#E8F8D8] dark:bg-[#1E3800]'
+                          : 'text-[#485B44] dark:text-[#9EB598] hover:bg-[#EDF6E8] dark:hover:bg-[#1C281A]'
+                      }`}
+                    >
+                      {t('cardFields.minimal')}
+                    </button>
+                  </div>
+                </div>
               </div>
             </motion.div>
           )}
@@ -707,7 +854,7 @@ export const BulletJournal: React.FC<BulletJournalProps> = ({
               <button
                 onClick={() => {
                   soundEngine.playPop();
-                  setIsAddModalOpen(true);
+                  setIsAddChooserOpen(true);
                 }}
                 className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-[#80D141] hover:bg-[#72BF36] text-[#0F2600] font-bold text-xs shadow-xs"
               >
@@ -721,15 +868,52 @@ export const BulletJournal: React.FC<BulletJournalProps> = ({
         </div>
       )}
 
+      {/* Two-Option Add Mode Chooser */}
+      <AddEntryModeChooser
+        isOpen={isAddChooserOpen}
+        mode="journal"
+        onClose={() => setIsAddChooserOpen(false)}
+        onSelectManual={() => {
+          setIsAddChooserOpen(false);
+          setManualDraft(null);
+          setIsAddModalOpen(true);
+        }}
+        onSelectVoice={() => {
+          setIsAddChooserOpen(false);
+          setIsVoiceAddOpen(true);
+        }}
+      />
+
+      {/* Voice-Assisted Entry Modal */}
+      <VoiceEntryModal
+        isOpen={isVoiceAddOpen}
+        mode="journal"
+        onClose={() => setIsVoiceAddOpen(false)}
+        prefs={effectivePrefs}
+        defaultDate={selectedDate}
+        categories={categories}
+        onSaveJournalEntry={handleAddEntry}
+        onOpenManualJournal={(draft) => {
+          setIsVoiceAddOpen(false);
+          setManualDraft(draft);
+          setIsAddModalOpen(true);
+        }}
+        onOpenSettings={onOpenSettings}
+      />
+
       {/* Add Bujo Entry Modal */}
       <AddBujoModal
         isOpen={isAddModalOpen}
-        onClose={() => setIsAddModalOpen(false)}
+        onClose={() => {
+          setIsAddModalOpen(false);
+          setManualDraft(null);
+        }}
         onAddEntry={handleAddEntry}
         defaultDate={selectedDate}
         currentEnergy={currentEnergy}
         categories={categories}
         onOpenSettings={onOpenSettings}
+        initialDraft={manualDraft}
       />
 
       {/* Edit Bujo Entry Modal */}
@@ -782,6 +966,29 @@ export const BulletJournal: React.FC<BulletJournalProps> = ({
     const completedMicroStepsCount = microSteps.filter((s) => s.completed).length;
     const energyMeta = ENERGY_LEVELS.find((l) => l.id === entry.energyCost) || ENERGY_LEVELS[0];
 
+    const showPriorityInSummary = effectiveCardFields.priority && Boolean(entry.isPriority);
+    const showStepsInSummary = effectiveCardFields.steps && microSteps.length > 0;
+    const showEnergyInSummary = effectiveCardFields.energy;
+    const showDateInSummary = Boolean(entry.date && journalView === 'timeline' && !allJournalFieldsHidden);
+    const showCategoryInSummary = effectiveCardFields.category && Boolean(entry.category);
+    const showTimeInSummary = effectiveCardFields.time && Boolean(entry.time || entry.durationMinutes);
+    const hasSummaryMetaRow =
+      showEnergyInSummary ||
+      showDateInSummary ||
+      showCategoryInSummary ||
+      showTimeInSummary ||
+      isOverdue ||
+      isMigrated;
+    const hasSecondLine = showStepsInSummary || hasSummaryMetaRow;
+
+    const hiddenPriority = !effectiveCardFields.priority && Boolean(entry.isPriority);
+    const hiddenEnergy = !effectiveCardFields.energy;
+    const hiddenCategory = !effectiveCardFields.category && Boolean(entry.category);
+    const hiddenTime = !effectiveCardFields.time && Boolean(entry.time || entry.durationMinutes);
+    const hiddenSteps = !effectiveCardFields.steps && microSteps.length > 0;
+    const hasHiddenExpandedMeta =
+      hiddenPriority || hiddenEnergy || hiddenCategory || hiddenTime || hiddenSteps;
+
     return (
       <motion.div
         key={entry.id}
@@ -797,10 +1004,10 @@ export const BulletJournal: React.FC<BulletJournalProps> = ({
             : 'bg-white dark:bg-[#182316] border-[#DCEAD4] dark:border-[#263722] hover:border-[#80D141]/60 dark:hover:border-[#80D141]/40 shadow-xs'
         }`}
       >
-        <div className="flex items-start justify-between gap-2.5 sm:gap-3">
+        <div className={`flex justify-between gap-2.5 sm:gap-3 ${hasSecondLine ? 'items-start' : 'items-center'}`}>
           
           {/* Left: Bullet Key Icon & Text */}
-          <div className="flex items-start gap-3 flex-1 min-w-0">
+          <div className={`flex gap-3 flex-1 min-w-0 ${hasSecondLine ? 'items-start' : 'items-center'}`}>
             
             {/* Interactive Key Symbol Button */}
             <button
@@ -808,7 +1015,7 @@ export const BulletJournal: React.FC<BulletJournalProps> = ({
                 e.stopPropagation();
                 handleToggleStatus(entry);
               }}
-              className={`w-8 h-8 mt-0.5 shrink-0 rounded-xl flex items-center justify-center font-mono font-bold text-sm transition-all ${
+              className={`w-8 h-8 ${hasSecondLine ? 'mt-0.5' : ''} shrink-0 rounded-xl flex items-center justify-center font-mono font-bold text-sm transition-all ${
                 isCompleted
                   ? 'bg-[#80D141] text-[#0F2600] shadow-md font-bold'
                   : isMigrated
@@ -828,7 +1035,7 @@ export const BulletJournal: React.FC<BulletJournalProps> = ({
 
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
-                {entry.isPriority && (
+                {showPriorityInSummary && (
                   <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#FFE9E9] dark:bg-[#3D1E22] text-[#B3261E] dark:text-[#F2B8B5] flex items-center gap-0.5 shrink-0">
                     <Star className="w-2.5 h-2.5 fill-current" />
                     {t('journal.priority')}
@@ -840,8 +1047,8 @@ export const BulletJournal: React.FC<BulletJournalProps> = ({
                 </span>
               </div>
 
-              {/* Micro-steps status banner if present */}
-              {microSteps.length > 0 && (
+              {/* Micro-steps status banner if shown in summary */}
+              {showStepsInSummary && (
                 <div className="mt-2 flex items-center gap-2 text-xs">
                   <span className="text-[11px] font-bold text-[#3B7E10] dark:text-[#80D141]">
                     {t('journal.microStepsDone')
@@ -867,60 +1074,64 @@ export const BulletJournal: React.FC<BulletJournalProps> = ({
               )}
 
               {/* Tags & Energy Meta & Date Badge */}
-              <div className="flex items-center gap-2 mt-2 text-[11px] text-[#485B44] dark:text-[#9EB598] flex-wrap font-medium">
-                <span className="px-2 py-0.5 rounded-full bg-[#E8F8D8] dark:bg-[#1E3800] text-[#1C3700] dark:text-[#80D141] font-bold flex items-center gap-1">
-                  <span>{energyMeta.icon}</span>
-                  <span className="capitalize">{getEnergyLabel(energyMeta.id, language)}</span>
-                </span>
-
-                {entry.date && journalView !== 'day' && (
-                  <span className="px-2 py-0.5 rounded-full bg-[#EDF6E8] dark:bg-[#202E1E] text-[#3B7E10] dark:text-[#80D141] font-semibold border border-[#DCEAD4] dark:border-[#263722] flex items-center gap-1">
-                    <CalendarIcon className="w-3 h-3" />
-                    <span>{getRelativeDayLabel(entry.date, language)}</span>
-                  </span>
-                )}
-
-                {entry.category && (
-                  <span className="px-2 py-0.5 rounded-full bg-[#EDF6E8] dark:bg-[#202E1E] text-[#485B44] dark:text-[#80D141] font-semibold border border-[#DCEAD4] dark:border-[#263722]">
-                    {getCategoryLabel(entry.category, language)}
-                  </span>
-                )}
-
-                {/* Scheduled Time & Duration Badge */}
-                {(entry.time || entry.durationMinutes) && (
-                  <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold inline-flex items-center gap-1 shrink-0 ${
-                    isCompleted
-                      ? 'bg-[#CCEBB6] dark:bg-[#254A20] text-[#14300B] dark:text-[#CFF3B8]'
-                      : 'bg-[#EDF6E8] dark:bg-[#202E1E] text-[#3B7E10] dark:text-[#9DD97A] border border-[#DCEAD4] dark:border-[#263722]'
-                  }`}>
-                    <Clock className="w-3 h-3" />
-                    <span>
-                      {entry.time ? (language === 'fa' ? toPersianDigits(entry.time) : entry.time) : ''}
-                      {entry.time && entry.durationMinutes ? ' • ' : ''}
-                      {entry.durationMinutes ? formatMinutes(entry.durationMinutes, language) : ''}
+              {hasSummaryMetaRow && (
+                <div className="flex items-center gap-2 mt-2 text-[11px] text-[#485B44] dark:text-[#9EB598] flex-wrap font-medium">
+                  {showEnergyInSummary && (
+                    <span className="px-2 py-0.5 rounded-full bg-[#E8F8D8] dark:bg-[#1E3800] text-[#1C3700] dark:text-[#80D141] font-bold flex items-center gap-1">
+                      <span>{energyMeta.icon}</span>
+                      <span className="capitalize">{getEnergyLabel(energyMeta.id, language)}</span>
                     </span>
-                  </span>
-                )}
+                  )}
 
-                {isOverdue && (
-                  <span className="text-[#B3261E] dark:text-[#F2B8B5] font-bold inline-flex items-center gap-1">
-                    <Clock className="w-3 h-3" />
-                    <span>{t('journal.overdue')}</span>
-                  </span>
-                )}
+                  {showDateInSummary && (
+                    <span className="px-2 py-0.5 rounded-full bg-[#EDF6E8] dark:bg-[#202E1E] text-[#3B7E10] dark:text-[#80D141] font-semibold border border-[#DCEAD4] dark:border-[#263722] flex items-center gap-1">
+                      <CalendarIcon className="w-3 h-3" />
+                      <span>{getRelativeDayLabel(entry.date, language)}</span>
+                    </span>
+                  )}
 
-                {isMigrated && (
-                  <span className="text-amber-600 dark:text-amber-400 font-bold">
-                    {t('journal.migrated')}
-                  </span>
-                )}
-              </div>
+                  {showCategoryInSummary && (
+                    <span className="px-2 py-0.5 rounded-full bg-[#EDF6E8] dark:bg-[#202E1E] text-[#485B44] dark:text-[#80D141] font-semibold border border-[#DCEAD4] dark:border-[#263722]">
+                      {getCategoryLabel(entry.category!, language)}
+                    </span>
+                  )}
+
+                  {/* Scheduled Time & Duration Badge */}
+                  {showTimeInSummary && (
+                    <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold inline-flex items-center gap-1 shrink-0 ${
+                      isCompleted
+                        ? 'bg-[#CCEBB6] dark:bg-[#254A20] text-[#14300B] dark:text-[#CFF3B8]'
+                        : 'bg-[#EDF6E8] dark:bg-[#202E1E] text-[#3B7E10] dark:text-[#9DD97A] border border-[#DCEAD4] dark:border-[#263722]'
+                    }`}>
+                      <Clock className="w-3 h-3" />
+                      <span>
+                        {entry.time ? (language === 'fa' ? toPersianDigits(entry.time) : entry.time) : ''}
+                        {entry.time && entry.durationMinutes ? ' • ' : ''}
+                        {entry.durationMinutes ? formatMinutes(entry.durationMinutes, language) : ''}
+                      </span>
+                    </span>
+                  )}
+
+                  {isOverdue && (
+                    <span className="text-[#B3261E] dark:text-[#F2B8B5] font-bold inline-flex items-center gap-1">
+                      <Clock className="w-3 h-3" />
+                      <span>{t('journal.overdue')}</span>
+                    </span>
+                  )}
+
+                  {isMigrated && (
+                    <span className="text-amber-600 dark:text-amber-400 font-bold">
+                      {t('journal.migrated')}
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
 
           </div>
 
           {/* Right: Expand / Collapse Down Arrow */}
-          <div className="shrink-0 self-start sm:self-center mt-0.5 sm:mt-0">
+          <div className={`shrink-0 ${hasSecondLine ? 'self-start sm:self-center mt-0.5 sm:mt-0' : 'self-center'}`}>
             <button
               onClick={(e) => {
                 e.stopPropagation();
@@ -944,7 +1155,7 @@ export const BulletJournal: React.FC<BulletJournalProps> = ({
 
         </div>
 
-        {/* Downward Expandable Actions Area */}
+        {/* Downward Expandable Details & Actions Area */}
         <AnimatePresence>
           {expandedEntryIds.has(entry.id) && (
             <motion.div
@@ -955,7 +1166,77 @@ export const BulletJournal: React.FC<BulletJournalProps> = ({
               onClick={(e) => e.stopPropagation()}
               className="overflow-hidden cursor-default"
             >
-              <div className="mt-3 pt-3 border-t border-[#DCEAD4] dark:border-[#263722] flex flex-wrap items-center justify-between gap-2">
+              <div className="mt-3 pt-3 border-t border-[#DCEAD4] dark:border-[#263722] space-y-2.5">
+                {/* Hidden Fields Revealed on Expand */}
+                {hasHiddenExpandedMeta && (
+                  <div className="space-y-1.5">
+                    {(hiddenPriority || hiddenEnergy || hiddenCategory || hiddenTime) && (
+                      <div className="flex items-center gap-2 flex-wrap text-xs font-medium text-[#485B44] dark:text-[#9EB598]">
+                        {hiddenPriority && (
+                          <span className="inline-flex items-center gap-1 font-bold text-[#B3261E] dark:text-[#F2B8B5]">
+                            <Star className="w-3 h-3 fill-current" />
+                            <span>{t('journal.priority')}</span>
+                          </span>
+                        )}
+                        {hiddenPriority && (hiddenEnergy || hiddenCategory || hiddenTime) && (
+                          <span aria-hidden="true" className="opacity-50">·</span>
+                        )}
+                        {hiddenEnergy && (
+                          <span className="inline-flex items-center gap-1 font-semibold text-[#1C3700] dark:text-[#A2EB68]">
+                            <span>{energyMeta.icon}</span>
+                            <span>{getEnergyLabel(energyMeta.id, language)}</span>
+                          </span>
+                        )}
+                        {hiddenEnergy && (hiddenCategory || hiddenTime) && (
+                          <span aria-hidden="true" className="opacity-50">·</span>
+                        )}
+                        {hiddenCategory && (
+                          <span className="font-semibold text-[#151E14] dark:text-[#E8F2E4]">
+                            {getCategoryLabel(entry.category!, language)}
+                          </span>
+                        )}
+                        {hiddenCategory && hiddenTime && (
+                          <span aria-hidden="true" className="opacity-50">·</span>
+                        )}
+                        {hiddenTime && (
+                          <span className="inline-flex items-center gap-1 font-semibold tabular-nums text-[#3B7E10] dark:text-[#9DD97A]">
+                            <Clock className="w-3 h-3" />
+                            <span>
+                              {entry.time ? (language === 'fa' ? toPersianDigits(entry.time) : entry.time) : ''}
+                              {entry.time && entry.durationMinutes ? ' • ' : ''}
+                              {entry.durationMinutes ? formatMinutes(entry.durationMinutes, language) : ''}
+                            </span>
+                          </span>
+                        )}
+                      </div>
+                    )}
+
+                    {hiddenSteps && (
+                      <div className="flex items-center gap-2 text-xs">
+                        <span className="text-[11px] font-bold text-[#3B7E10] dark:text-[#80D141]">
+                          {t('journal.microStepsDone')
+                            .replace('{done}', language === 'fa' ? toPersianDigits(completedMicroStepsCount) : String(completedMicroStepsCount))
+                            .replace('{total}', language === 'fa' ? toPersianDigits(microSteps.length) : String(microSteps.length))}
+                        </span>
+                        <div className="w-20 h-1.5 rounded-full bg-[#EDF6E8] dark:bg-[#263722] overflow-hidden">
+                          <div
+                            className="h-full bg-[#80D141] rounded-full"
+                            style={{ width: `${(completedMicroStepsCount / microSteps.length) * 100}%` }}
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setUnstickEntry(entry)}
+                          className="text-[11px] text-[#3B7E10] dark:text-[#80D141] font-bold hover:underline cursor-pointer"
+                        >
+                          {t('journal.viewSteps')}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <div className="flex flex-wrap items-center justify-between gap-2">
                 {/* Left: Quick Actions */}
                 <div className="flex items-center gap-1.5 flex-wrap">
                   {/* "Unstick Me" AI button on open tasks */}
@@ -1081,6 +1362,7 @@ export const BulletJournal: React.FC<BulletJournalProps> = ({
                   />
                 </div>
               )}
+              </div>
             </motion.div>
           )}
         </AnimatePresence>

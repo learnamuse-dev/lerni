@@ -1,7 +1,8 @@
-import { GoogleGenAI, Type } from '@google/genai';
 import {
   BujoEntry,
+  BujoType,
   Habit,
+  TimeBucket,
   FocusSession,
   UserPreferences,
   EnergyLevel,
@@ -12,14 +13,13 @@ import {
   SensoryState,
   SchedulingConstraint,
   AiProvider,
-  DEFAULT_GEMINI_MODEL,
   DEFAULT_OPENROUTER_MODEL,
   DEFAULT_CUSTOM_OPENAI_BASE_URL,
   DEFAULT_CUSTOM_OPENAI_MODEL,
   isLocalEndpoint,
   isHabitActiveOnDate,
 } from '../types';
-import { formatDateDisplay } from './dateUtils';
+import { formatDateDisplay, shiftDate } from './dateUtils';
 
 export interface GenerateScheduleParams {
   targetDate: string;
@@ -39,7 +39,7 @@ export interface GenerateScheduleParams {
 export interface OptimizationResult {
   plan: DayPlan;
   isAiGenerated: boolean;
-  source: 'gemini' | 'heuristic_fallback';
+  source: 'openrouter' | 'custom' | 'heuristic_fallback';
   message?: string;
 }
 
@@ -99,13 +99,23 @@ export async function callOpenAiCompatible({
     ...extraHeaders,
   };
 
+  const isAzureEndpoint =
+    endpoint.toLowerCase().includes('.openai.azure.com') ||
+    endpoint.toLowerCase().includes('azure.com') ||
+    Boolean(apiVersion?.trim());
+
   if (cleanKey) {
-    headers['Authorization'] = `Bearer ${cleanKey}`;
-    headers['api-key'] = cleanKey; // Support Azure OpenAI
+    if (isAzureEndpoint) {
+      headers['api-key'] = cleanKey; // Azure OpenAI requires api-key
+    } else {
+      headers['Authorization'] = `Bearer ${cleanKey}`;
+    }
   }
 
   if (endpoint.includes('openrouter.ai')) {
-    headers['HTTP-Referer'] = typeof window !== 'undefined' ? window.location.origin : 'https://lerni.app';
+    if (typeof window !== 'undefined' && window.location?.origin) {
+      headers['HTTP-Referer'] = window.location.origin;
+    }
     headers['X-Title'] = 'Lerni Focus & Executive Function Companion';
   }
 
@@ -202,7 +212,7 @@ export async function callOpenRouter({
   });
 }
 
-// Test AI connection directly from browser (supports Gemini, OpenRouter, and Custom OpenAI-compatible)
+// Test AI connection directly from browser (supports OpenRouter and Custom OpenAI-compatible)
 export interface AiPromptTestResult {
   valid: boolean;
   message: string;
@@ -214,7 +224,7 @@ export interface AiPromptTestResult {
 }
 
 export async function testAiPrompt({
-  provider = 'gemini',
+  provider = 'openrouter',
   apiKey,
   model,
   prompt,
@@ -233,14 +243,10 @@ export async function testAiPrompt({
   const cleanPrompt = prompt?.trim() || 'What is the capital of France?';
   const activeBaseUrl = baseUrl?.trim() || DEFAULT_CUSTOM_OPENAI_BASE_URL;
 
-  let activeModel = '';
-  if (provider === 'custom') {
-    activeModel = model?.trim() || DEFAULT_CUSTOM_OPENAI_MODEL;
-  } else if (provider === 'openrouter') {
-    activeModel = model?.trim() || DEFAULT_OPENROUTER_MODEL;
-  } else {
-    activeModel = model?.trim() || DEFAULT_GEMINI_MODEL;
-  }
+  const activeModel =
+    provider === 'custom'
+      ? model?.trim() || DEFAULT_CUSTOM_OPENAI_MODEL
+      : model?.trim() || DEFAULT_OPENROUTER_MODEL;
 
   // Key validation: local custom endpoints don't need keys
   if (!cleanKey) {
@@ -252,9 +258,7 @@ export async function testAiPrompt({
         message:
           provider === 'custom'
             ? 'No API key provided for your custom cloud endpoint. Please enter your API key.'
-            : provider === 'openrouter'
-            ? 'No OpenRouter API key provided. Please enter your API key.'
-            : 'No Gemini API key provided. Please enter your API key.',
+            : 'No OpenRouter API key provided. Please enter your API key.',
         latencyMs: 0,
         provider,
         model: activeModel,
@@ -274,20 +278,13 @@ export async function testAiPrompt({
         userPrompt: cleanPrompt,
         expectJson: false,
       });
-    } else if (provider === 'openrouter') {
+    } else {
       reply = await callOpenRouter({
         apiKey: cleanKey,
         model: activeModel,
         userPrompt: cleanPrompt,
         expectJson: false,
       });
-    } else {
-      const client = new GoogleGenAI({ apiKey: cleanKey });
-      const response = await client.models.generateContent({
-        model: activeModel,
-        contents: cleanPrompt,
-      });
-      reply = response.text?.trim() || '(No response text returned)';
     }
 
     const latencyMs = Math.round(performance.now() - startTime);
@@ -311,9 +308,7 @@ export async function testAiPrompt({
       userFriendlyMsg =
         provider === 'custom'
           ? 'Invalid API Key for custom endpoint. Please verify your credentials.'
-          : provider === 'openrouter'
-          ? 'Invalid OpenRouter API Key. Please verify your key from openrouter.ai/keys.'
-          : 'Invalid Gemini API Key. Please verify your key from Google AI Studio.';
+          : 'Invalid OpenRouter API Key. Please verify your key from openrouter.ai/keys.';
     } else if (isQuotaError) {
       userFriendlyMsg = 'Quota or rate limit reached. Please check your account credits or rate limits.';
     }
@@ -330,7 +325,7 @@ export async function testAiPrompt({
 }
 
 export async function testAiConnection({
-  provider = 'gemini',
+  provider = 'openrouter',
   apiKey,
   model,
   baseUrl,
@@ -351,12 +346,7 @@ export async function testAiConnection({
     prompt: "Respond with only 'OK'.",
   });
 
-  const providerName =
-    provider === 'custom'
-      ? 'Custom OpenAI API'
-      : provider === 'openrouter'
-      ? 'OpenRouter'
-      : 'Gemini';
+  const providerName = provider === 'custom' ? 'Custom OpenAI API' : 'OpenRouter';
 
   return {
     valid: result.valid,
@@ -391,7 +381,7 @@ export function derivePaceFromSensoryState(sensoryState?: SensoryState, currentE
   return 'balanced';
 }
 
-// Generate schedule directly via Gemini or OpenRouter API from the browser with graceful local heuristic fallback
+// Generate schedule directly via OpenRouter or Custom OpenAI-compatible API from the browser with graceful local heuristic fallback
 export async function optimizeDailySchedule(params: GenerateScheduleParams): Promise<OptimizationResult> {
   const {
     targetDate,
@@ -428,7 +418,7 @@ export async function optimizeDailySchedule(params: GenerateScheduleParams): Pro
   const recentSessions = focusSessions.slice(0, 10);
   const totalFocusMinutes = Math.round(recentSessions.reduce((acc, s) => acc + s.durationSeconds, 0) / 60);
 
-  const provider: AiProvider = prefs.aiProvider || 'gemini';
+  const provider: AiProvider = prefs.aiProvider === 'custom' ? 'custom' : 'openrouter';
   const currentEnergy = prefs.currentEnergy || 'medium';
   const sensoryState = prefs.sensoryState || 'balanced';
   const dayOfWeek = formatDateDisplay(targetDate, { showDayOfWeek: true, includeYear: false });
@@ -603,76 +593,6 @@ Return ONLY a valid JSON object matching this exact structure (no markdown fence
       });
 
       scheduleData = JSON.parse(responseText);
-    } else {
-      const geminiKey = prefs.geminiApiKey?.trim() || '';
-      if (!geminiKey) {
-        throw new Error('No Gemini API key available. Please enter your API key in Settings.');
-      }
-
-      const activeGeminiModel = prefs.geminiModel?.trim() || DEFAULT_GEMINI_MODEL;
-      const client = new GoogleGenAI({ apiKey: geminiKey });
-
-      const response = await client.models.generateContent({
-        model: activeGeminiModel,
-        contents: `Analyze these tasks and energy patterns to construct the optimal daily schedule:\n${JSON.stringify(promptPayload, null, 2)}`,
-        config: {
-          systemInstruction,
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              summary: {
-                type: Type.STRING,
-                description: "Warm, empowering 1-2 sentence overview of how today's flow aligns with their energy.",
-              },
-              predictedEnergyRhythm: {
-                type: Type.OBJECT,
-                properties: {
-                  morning: { type: Type.STRING, description: "Predicted morning energy: 'low', 'medium', or 'high'" },
-                  afternoon: { type: Type.STRING, description: "Predicted afternoon energy: 'low', 'medium', or 'high'" },
-                  evening: { type: Type.STRING, description: "Predicted evening energy: 'low', 'medium', or 'high'" },
-                  rhythmNote: { type: Type.STRING, description: '1 sentence explaining the predicted energy curve.' },
-                },
-                required: ['morning', 'afternoon', 'evening', 'rhythmNote'],
-              },
-              scheduleBlocks: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    id: { type: Type.STRING, description: 'Unique block id, e.g. block-1' },
-                    startTime: { type: Type.STRING, description: 'HH:mm 24hr format, e.g. 09:00' },
-                    endTime: { type: Type.STRING, description: 'HH:mm 24hr format, e.g. 09:30' },
-                    title: { type: Type.STRING, description: 'Clear descriptive task or activity title' },
-                    type: { type: Type.STRING, description: "'task', 'event', 'break', 'habit', or 'micro_reset'" },
-                    energyDemand: { type: Type.STRING, description: "'low', 'medium', or 'high'" },
-                    durationMinutes: { type: Type.INTEGER, description: 'Duration in minutes' },
-                    bujoEntryId: { type: Type.STRING, description: 'Matched BujoEntry id if mapped, or empty string' },
-                    executiveRationale: { type: Type.STRING, description: 'Encouraging, ADHD-friendly reason for this placement' },
-                    isBreak: { type: Type.BOOLEAN, description: 'True if rest/recharge block' },
-                  },
-                  required: ['id', 'startTime', 'endTime', 'title', 'type', 'energyDemand', 'durationMinutes', 'executiveRationale'],
-                },
-              },
-              pacingAdvice: {
-                type: Type.ARRAY,
-                items: { type: Type.STRING },
-                description: '3 concise, actionable executive-function tips tailored to their current state',
-              },
-              totalFocusMinutes: { type: Type.INTEGER, description: 'Sum of productive work minutes' },
-              totalBreakMinutes: { type: Type.INTEGER, description: 'Sum of scheduled rest minutes' },
-            },
-            required: ['summary', 'predictedEnergyRhythm', 'scheduleBlocks', 'pacingAdvice', 'totalFocusMinutes', 'totalBreakMinutes'],
-          },
-        },
-      });
-
-      const responseText = response.text?.trim();
-      if (!responseText) {
-        throw new Error('Empty response received from Gemini model.');
-      }
-
-      scheduleData = JSON.parse(responseText);
     }
 
     const plan: DayPlan = {
@@ -709,7 +629,7 @@ Return ONLY a valid JSON object matching this exact structure (no markdown fence
     return {
       plan,
       isAiGenerated: true,
-      source: 'gemini',
+      source: provider === 'custom' ? 'custom' : 'openrouter',
     };
   } catch (err: any) {
     console.warn('AI API issue, falling back to local heuristic scheduler:', err?.message || err);
@@ -1046,7 +966,7 @@ export async function generateStarterStepsForBlock(
 ): Promise<string[]> {
   const isFa = prefs.language === 'fa';
   const sensoryState = prefs.sensoryState || 'balanced';
-  const provider: AiProvider = prefs.aiProvider || 'gemini';
+  const provider: AiProvider = prefs.aiProvider === 'custom' ? 'custom' : 'openrouter';
 
   const prompt = `You are an ADHD executive function initiation coach.
 The user wants to start this task: "${taskTitle}".
@@ -1095,7 +1015,7 @@ ${isFa ? '4. IMPORTANT: Write all 3 starter steps strictly in natural, encouragi
       if (Array.isArray(parsed.steps) && parsed.steps.length > 0) {
         return parsed.steps;
       }
-    } else if (provider === 'openrouter') {
+    } else {
       const orKey = prefs.openRouterApiKey?.trim() || '';
       if (!orKey) {
         throw new Error('No OpenRouter API key available.');
@@ -1112,41 +1032,6 @@ ${isFa ? '4. IMPORTANT: Write all 3 starter steps strictly in natural, encouragi
       const parsed = JSON.parse(responseText);
       if (Array.isArray(parsed.steps) && parsed.steps.length > 0) {
         return parsed.steps;
-      }
-    } else {
-      const geminiKey = prefs.geminiApiKey?.trim() || '';
-      if (!geminiKey) {
-        throw new Error('No Gemini API key available.');
-      }
-
-      const activeGeminiModel = prefs.geminiModel?.trim() || DEFAULT_GEMINI_MODEL;
-      const client = new GoogleGenAI({ apiKey: geminiKey });
-
-      const response = await client.models.generateContent({
-        model: activeGeminiModel,
-        contents: prompt,
-        config: {
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              steps: {
-                type: Type.ARRAY,
-                items: { type: Type.STRING },
-                description: 'Exactly 3 low-barrier 2-minute initiation subtasks',
-              },
-            },
-            required: ['steps'],
-          },
-        },
-      });
-
-      const responseText = response.text?.trim();
-      if (responseText) {
-        const parsed = JSON.parse(responseText);
-        if (Array.isArray(parsed.steps) && parsed.steps.length > 0) {
-          return parsed.steps;
-        }
       }
     }
   } catch (err) {
@@ -1176,7 +1061,7 @@ export async function generateTenSecondHabitFallback(
   prefs: UserPreferences
 ): Promise<string> {
   const isFa = prefs.language === 'fa';
-  const provider: AiProvider = prefs.aiProvider || 'gemini';
+  const provider: AiProvider = prefs.aiProvider === 'custom' ? 'custom' : 'openrouter';
 
   const systemInstruction = `You are an ADHD executive function initiation coach.
 Your job is to generate a single ultra-low-barrier, 10-second "unstick" micro-action for the user's habit to overcome initial friction and task paralysis.
@@ -1219,7 +1104,7 @@ ${isFa ? '4. Return ONLY in natural, encouraging Persian (Farsi / فارسی).' 
 
       const cleaned = responseText.replace(/^["'`]+|["'`]+$/g, '').trim();
       if (cleaned) return cleaned;
-    } else if (provider === 'openrouter') {
+    } else {
       const orKey = prefs.openRouterApiKey?.trim() || '';
       if (!orKey) {
         throw new Error('No OpenRouter API key configured');
@@ -1235,22 +1120,6 @@ ${isFa ? '4. Return ONLY in natural, encouraging Persian (Farsi / فارسی).' 
 
       const cleaned = responseText.replace(/^["'`]+|["'`]+$/g, '').trim();
       if (cleaned) return cleaned;
-    } else {
-      const geminiKey = prefs.geminiApiKey?.trim() || '';
-      if (!geminiKey) {
-        throw new Error('No Gemini API key configured');
-      }
-
-      const activeGeminiModel = prefs.geminiModel?.trim() || DEFAULT_GEMINI_MODEL;
-      const client = new GoogleGenAI({ apiKey: geminiKey });
-
-      const response = await client.models.generateContent({
-        model: activeGeminiModel,
-        contents: `${systemInstruction}\n\n${prompt}`,
-      });
-
-      const responseText = response.text?.replace(/^["'`]+|["'`]+$/g, '').trim();
-      if (responseText) return responseText;
     }
   } catch (err) {
     console.warn('Network/API issue generating 10s fallback, using heuristic fallback:', err);
@@ -1264,7 +1133,7 @@ ${isFa ? '4. Return ONLY in natural, encouraging Persian (Farsi / فارسی).' 
 }
 
 /**
- * Constructs a self-contained, high-quality prompt for external chatbots (ChatGPT, Claude, Gemini, DeepSeek, etc.)
+ * Constructs a self-contained, high-quality prompt for external chatbots (ChatGPT, Claude, DeepSeek, etc.)
  * allowing users to plan their day without needing an API key.
  */
 export function buildChatbotPlanningPrompt(params: GenerateScheduleParams, lang: 'en' | 'fa' = 'en'): string {
@@ -1444,7 +1313,7 @@ Section 2: A strictly valid JSON object inside a \`\`\`json code block matching 
 }
 
 /**
- * Safely parses and normalizes a DayPlan from raw text or JSON returned by any external chatbot (ChatGPT, Claude, Gemini, etc.)
+ * Safely parses and normalizes a DayPlan from raw text or JSON returned by any external chatbot (ChatGPT, Claude, DeepSeek, etc.)
  */
 export function parseScheduleFromAiResponse(rawInput: string, fallbackDate: string): DayPlan {
   if (!rawInput || typeof rawInput !== 'string') {
@@ -1529,6 +1398,246 @@ export function parseScheduleFromAiResponse(rawInput: string, fallbackDate: stri
 
   return plan;
 }
+
+export interface ParsedVoiceBujoDraft {
+  content: string;
+  type: BujoType;
+  date: string;
+  time?: string;
+  durationMinutes?: number;
+  energyCost: EnergyLevel;
+  isPriority: boolean;
+  category: string;
+}
+
+export interface ParsedVoiceHabitDraft {
+  title: string;
+  timeBucket: TimeBucket;
+  time?: string;
+  durationMinutes?: number;
+  activeDays?: number[];
+  energyCost: EnergyLevel;
+  unstickTip?: string;
+}
+
+function normalizeTimeHHmm(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const trimmed = raw.trim();
+  const match = trimmed.match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
+  if (!match) return undefined;
+  return `${match[1].padStart(2, '0')}:${match[2]}`;
+}
+
+function normalizeDuration(raw: unknown): number | undefined {
+  const num = typeof raw === 'number' ? raw : parseInt(String(raw || ''), 10);
+  if (!Number.isFinite(num) || num <= 0 || num > 720) return undefined;
+  return Math.round(num);
+}
+
+function normalizeDateYYYYMMDD(raw: unknown, fallback: string): string {
+  if (typeof raw !== 'string') return fallback;
+  const trimmed = raw.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+  return fallback;
+}
+
+async function callConfiguredAiJson(
+  systemInstruction: string,
+  userPrompt: string,
+  prefs: UserPreferences
+): Promise<string> {
+  const provider: AiProvider = prefs.aiProvider === 'custom' ? 'custom' : 'openrouter';
+
+  if (provider === 'custom') {
+    const baseUrl =
+      prefs.customOpenAiBaseUrl?.trim() ||
+      (typeof import.meta !== 'undefined' ? import.meta.env?.VITE_OPENAI_COMPATIBLE_BASE_URL : '') ||
+      DEFAULT_CUSTOM_OPENAI_BASE_URL;
+    const customKey =
+      prefs.customOpenAiApiKey?.trim() ||
+      (typeof import.meta !== 'undefined' ? import.meta.env?.VITE_OPENAI_COMPATIBLE_API_KEY : '') ||
+      '';
+    const customModel =
+      prefs.customOpenAiModel?.trim() ||
+      (typeof import.meta !== 'undefined' ? import.meta.env?.VITE_OPENAI_COMPATIBLE_MODEL : '') ||
+      DEFAULT_CUSTOM_OPENAI_MODEL;
+    const apiVersion =
+      prefs.customOpenAiApiVersion?.trim() ||
+      (typeof import.meta !== 'undefined' ? import.meta.env?.VITE_OPENAI_COMPATIBLE_API_VERSION : '') ||
+      '';
+
+    if (!customKey && !isLocalEndpoint(baseUrl)) {
+      throw new Error('MISSING_AI_KEY');
+    }
+
+    return callOpenAiCompatible({
+      baseUrl,
+      apiKey: customKey,
+      model: customModel,
+      apiVersion,
+      systemInstruction,
+      userPrompt,
+      expectJson: true,
+    });
+  }
+
+  const orKey = prefs.openRouterApiKey?.trim() || '';
+  if (!orKey) {
+    throw new Error('MISSING_AI_KEY');
+  }
+
+  return callOpenRouter({
+    apiKey: orKey,
+    model: prefs.openRouterModel?.trim() || DEFAULT_OPENROUTER_MODEL,
+    systemInstruction,
+    userPrompt,
+    expectJson: true,
+  });
+}
+
+export async function parseVoiceToBujoEntry(
+  transcript: string,
+  params: {
+    todayDate: string;
+    defaultDate: string;
+    categories: string[];
+    prefs: UserPreferences;
+  }
+): Promise<ParsedVoiceBujoDraft> {
+  const cleanTranscript = transcript.trim();
+  if (!cleanTranscript) {
+    throw new Error('EMPTY_TRANSCRIPT');
+  }
+
+  const { todayDate, defaultDate, categories, prefs } = params;
+  const availableCategories = categories.length > 0 ? categories : ['General'];
+  const tomorrowDate = shiftDate(todayDate, 1);
+  const dayAfterDate = shiftDate(todayDate, 2);
+  const todayWeekday = new Date(`${todayDate}T12:00:00`).toLocaleDateString('en-US', { weekday: 'long' });
+
+  const systemInstruction = `You extract a single structured Bullet Journal entry from natural spoken speech (English or Persian/Farsi).
+Return ONLY valid JSON with these exact keys:
+{
+  "content": string,
+  "type": "task" | "event" | "note",
+  "date": "YYYY-MM-DD",
+  "time": "HH:mm" or null,
+  "durationMinutes": number or null,
+  "energyCost": "low" | "medium" | "high",
+  "isPriority": boolean,
+  "category": string
+}
+
+Rules:
+1. "content": Clean, concise, actionable entry text in the exact language the user spoke. Strip conversational filler like "Add a task to..." or "یادم بنداز که...".
+2. "type": Use "event" for meetings, appointments, calls at a fixed time, classes; "note" for reflections, ideas, memories, observations; otherwise default to "task".
+3. "date": Today is ${todayDate} (${todayWeekday}), Tomorrow is ${tomorrowDate}, Day after tomorrow is ${dayAfterDate}. Resolve relative day references accurately to YYYY-MM-DD. If no date is mentioned, use "${defaultDate}".
+4. "time": Convert spoken time (e.g. "3pm", "ساعت پنج عصر", "14:30", "9 in the morning") to 24-hour "HH:mm". Use null if no time was mentioned.
+5. "durationMinutes": Extract duration in minutes as an integer (e.g. "half an hour" -> 30, "نیم ساعت" -> 30, "25 mins" -> 25). Use null if unmentioned.
+6. "energyCost": Infer "low", "medium", or "high" from the speech or task difficulty. If unclear, default to "${prefs.currentEnergy || 'medium'}".
+7. "isPriority": true ONLY if the user indicates urgency, importance, priority, or starring (e.g. "urgent", "important", "priority", "مهم", "فوری").
+8. "category": Choose the closest matching category string EXACTLY from this list: ${JSON.stringify(availableCategories)}. Fallback to "${availableCategories[0]}".`;
+
+  const userPrompt = `Spoken transcript:\n"""\n${cleanTranscript}\n"""`;
+
+  const rawJson = await callConfiguredAiJson(systemInstruction, userPrompt, prefs);
+
+  const parsed = JSON.parse(rawJson);
+  const resolvedType: BujoType = ['task', 'event', 'note'].includes(parsed.type) ? parsed.type : 'task';
+  const resolvedEnergy: EnergyLevel = ['low', 'medium', 'high'].includes(parsed.energyCost)
+    ? parsed.energyCost
+    : prefs.currentEnergy || 'medium';
+  const matchedCat =
+    availableCategories.find((c) => c.toLowerCase() === String(parsed.category || '').trim().toLowerCase()) ||
+    availableCategories[0];
+
+  return {
+    content: String(parsed.content || cleanTranscript).trim() || cleanTranscript,
+    type: resolvedType,
+    date: normalizeDateYYYYMMDD(parsed.date, defaultDate),
+    time: normalizeTimeHHmm(parsed.time),
+    durationMinutes: normalizeDuration(parsed.durationMinutes),
+    energyCost: resolvedEnergy,
+    isPriority: Boolean(parsed.isPriority),
+    category: matchedCat,
+  };
+}
+
+export async function parseVoiceToHabit(
+  transcript: string,
+  params: {
+    prefs: UserPreferences;
+  }
+): Promise<ParsedVoiceHabitDraft> {
+  const cleanTranscript = transcript.trim();
+  if (!cleanTranscript) {
+    throw new Error('EMPTY_TRANSCRIPT');
+  }
+
+  const { prefs } = params;
+  const isFa = prefs.language === 'fa';
+
+  const systemInstruction = `You extract a single structured micro-habit from natural spoken speech (English or Persian/Farsi).
+Return ONLY valid JSON with these exact keys:
+{
+  "title": string,
+  "timeBucket": "morning" | "midday" | "evening" | "anytime",
+  "time": "HH:mm" or null,
+  "durationMinutes": number or null,
+  "activeDays": number[],
+  "energyCost": "low" | "medium" | "high",
+  "unstickTip": string or null
+}
+
+Rules:
+1. "title": Clean, encouraging, concise habit name in the exact language spoken. Keep micro-habit friendly phrasing (strip filler like "I want a habit to...").
+2. "timeBucket": "morning", "midday", "evening", or "anytime". If a specific hour is given (05:00-11:59 -> morning, 12:00-16:59 -> midday, 17:00-23:59 -> evening), align with it. If unmentioned, use "anytime" or "morning" when natural.
+3. "time": Convert spoken preferred time to 24-hour "HH:mm" or null if unmentioned.
+4. "durationMinutes": Extract duration in minutes as a positive integer or null if unmentioned.
+5. "activeDays": Array of integers 0..6 where Sunday=0, Monday=1, Tuesday=2, Wednesday=3, Thursday=4, Friday=5, Saturday=6.
+   - If daily / every day / هر روز / unspecified -> return [0, 1, 2, 3, 4, 5, 6].
+   - English weekdays -> [1, 2, 3, 4, 5]; English weekends -> [0, 6].
+   - Persian weekdays (روزهای کاری / شنبه تا چهارشنبه) -> [6, 0, 1, 2, 3]; Persian weekends (آخر هفته / پنج‌شنبه و جمعه) -> [4, 5].
+6. "energyCost": "low", "medium", or "high". Default to "low" for tiny habits unless clearly moderate/intense.
+7. "unstickTip": Optional 10-second zero-shame tiny fallback step (<16 words) in ${isFa ? 'Persian (Farsi / فارسی)' : 'the language spoken'}, helping beat procrastination on low-energy days.`;
+
+  const userPrompt = `Spoken transcript:\n"""\n${cleanTranscript}\n"""`;
+
+  const rawJson = await callConfiguredAiJson(systemInstruction, userPrompt, prefs);
+
+  const parsed = JSON.parse(rawJson);
+  const resolvedBucket: TimeBucket = ['morning', 'midday', 'evening', 'anytime'].includes(parsed.timeBucket)
+    ? parsed.timeBucket
+    : 'anytime';
+  const resolvedEnergy: EnergyLevel = ['low', 'medium', 'high'].includes(parsed.energyCost)
+    ? parsed.energyCost
+    : 'low';
+
+  let normalizedDays: number[] | undefined;
+  if (Array.isArray(parsed.activeDays)) {
+    const valid = Array.from(
+      new Set<number>(
+        parsed.activeDays
+          .map((d: any) => Number(d))
+          .filter((d: number) => Number.isInteger(d) && d >= 0 && d <= 6)
+      )
+    ).sort((a, b) => a - b);
+    if (valid.length > 0 && valid.length < 7) {
+      normalizedDays = valid;
+    }
+  }
+
+  return {
+    title: String(parsed.title || cleanTranscript).trim() || cleanTranscript,
+    timeBucket: resolvedBucket,
+    time: normalizeTimeHHmm(parsed.time),
+    durationMinutes: normalizeDuration(parsed.durationMinutes),
+    activeDays: normalizedDays,
+    energyCost: resolvedEnergy,
+    unstickTip: typeof parsed.unstickTip === 'string' && parsed.unstickTip.trim() ? parsed.unstickTip.trim() : undefined,
+  };
+}
+
 
 
 
