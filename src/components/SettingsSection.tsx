@@ -47,6 +47,8 @@ import {
   ChevronRight,
   Smartphone,
   Database,
+  Briefcase,
+  GraduationCap,
 } from 'lucide-react';
 import {
   UserPreferences,
@@ -85,6 +87,8 @@ const SECTION_ICONS: Record<NavSection, React.ReactNode> = {
   journal: <BookOpenText className="w-5 h-5" />,
   habits: <Sprout className="w-5 h-5" />,
   focus: <Timer className="w-5 h-5" />,
+  work: <Briefcase className="w-5 h-5" />,
+  study: <GraduationCap className="w-5 h-5" />,
   braindump: <Brain className="w-5 h-5" />,
 };
 
@@ -2170,7 +2174,14 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({
                               {icon}
                             </div>
 
-                            <h5 className="font-bold text-sm text-[#151E14] dark:text-[#E8F2E4] truncate">{label}</h5>
+                            <div className="min-w-0">
+                              <h5 className="font-bold text-sm text-[#151E14] dark:text-[#E8F2E4] truncate">{label}</h5>
+                              {index >= 4 && (
+                                <p className="text-[11px] text-[#485B44] dark:text-[#9EB598] truncate">
+                                  {t('settings.navMoreSlotHint', 'Shown in More menu')}
+                                </p>
+                              )}
+                            </div>
                           </div>
 
                           <div className="flex items-center gap-1 shrink-0">

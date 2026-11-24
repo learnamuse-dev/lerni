@@ -9,13 +9,14 @@ import {
   Settings,
   Clock
 } from 'lucide-react';
-import { BujoEntry, BujoType, EnergyLevel, ENERGY_LEVELS } from '../../types';
+import { BujoEntry, BujoType, EnergyLevel, ENERGY_LEVELS, SpaceItem } from '../../types';
 import { soundEngine } from '../../utils/audioSynth';
 import { getTodayKey } from '../../utils/dateUtils';
 import { DEFAULT_JOURNAL_CATEGORIES } from '../../utils/storage';
 import { useI18n, getCategoryLabel, getEnergyLabel, toPersianDigits } from '../../utils/i18n';
 import { MaterialExpressiveDatePicker } from '../common/MaterialExpressiveDatePicker';
 import { MaterialExpressiveTimePicker } from '../common/MaterialExpressiveTimePicker';
+import { SpaceItemPicker } from '../common/SpaceItemPicker';
 
 interface EditBujoModalProps {
   entry: BujoEntry | null;
@@ -23,6 +24,7 @@ interface EditBujoModalProps {
   onClose: () => void;
   onSave: (updatedEntry: BujoEntry) => void;
   categories?: string[];
+  spaceItems?: SpaceItem[];
   onOpenSettings?: () => void;
 }
 
@@ -38,6 +40,7 @@ export const EditBujoModal: React.FC<EditBujoModalProps> = ({
   onClose,
   onSave,
   categories,
+  spaceItems = [],
   onOpenSettings,
 }) => {
   const { t, language } = useI18n();
@@ -52,6 +55,7 @@ export const EditBujoModal: React.FC<EditBujoModalProps> = ({
   const [energyCost, setEnergyCost] = useState<EnergyLevel>('low');
   const [isPriority, setIsPriority] = useState(false);
   const [category, setCategory] = useState<string>(availableCategories[0] || 'General');
+  const [linkedItemId, setLinkedItemId] = useState<string | undefined>(undefined);
 
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -65,6 +69,7 @@ export const EditBujoModal: React.FC<EditBujoModalProps> = ({
       setEnergyCost(entry.energyCost || 'low');
       setIsPriority(Boolean(entry.isPriority));
       setCategory(entry.category || availableCategories[0] || 'General');
+      setLinkedItemId(entry.linkedItemId);
       setTimeout(() => {
         inputRef.current?.focus();
       }, 100);
@@ -90,6 +95,7 @@ export const EditBujoModal: React.FC<EditBujoModalProps> = ({
       isPriority: isPriority,
       category: category.trim() || 'General',
       tags: [category.trim() || 'General'],
+      linkedItemId: linkedItemId || undefined,
     };
 
     onSave(updated);
@@ -390,6 +396,13 @@ export const EditBujoModal: React.FC<EditBujoModalProps> = ({
             </div>
           </div>
         </div>
+
+        {/* Work / Study Item Assignment */}
+        <SpaceItemPicker
+          spaceItems={spaceItems}
+          selectedItemId={linkedItemId}
+          onChange={setLinkedItemId}
+        />
 
         {/* Modal Actions */}
         <div className="flex items-center justify-end gap-2 pt-3 border-t border-[#DCEAD4] dark:border-[#263722]">

@@ -22,7 +22,7 @@ import {
   Filter,
   AlertCircle
 } from 'lucide-react';
-import { BrainDumpItem, EnergyLevel, ENERGY_LEVELS, BujoEntry, Habit } from '../../types';
+import { BrainDumpItem, EnergyLevel, ENERGY_LEVELS, BujoEntry, Habit, SpaceItem } from '../../types';
 import { LerniMascot } from '../Mascot/LerniMascot';
 import { soundEngine } from '../../utils/audioSynth';
 import { useI18n, toPersianDigits, getCategoryLabel, getEnergyLabel } from '../../utils/i18n';
@@ -38,6 +38,7 @@ interface BrainDumpProps {
   categories?: string[];
   onOpenSettings?: () => void;
   hasApiKey?: boolean;
+  spaceItems?: SpaceItem[];
 }
 
 export const BrainDump: React.FC<BrainDumpProps> = ({
@@ -49,6 +50,7 @@ export const BrainDump: React.FC<BrainDumpProps> = ({
   categories,
   onOpenSettings,
   hasApiKey = false,
+  spaceItems = [],
 }) => {
   const { t, language } = useI18n();
   const [inputText, setInputText] = useState('');
@@ -1049,6 +1051,7 @@ export const BrainDump: React.FC<BrainDumpProps> = ({
         currentEnergy={currentEnergy}
         categories={categories}
         onOpenSettings={onOpenSettings}
+        spaceItems={spaceItems}
       />
 
     </div>

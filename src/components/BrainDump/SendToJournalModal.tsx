@@ -9,13 +9,14 @@ import {
   Plus,
   Clock
 } from 'lucide-react';
-import { BrainDumpItem, BujoEntry, BujoType, EnergyLevel, ENERGY_LEVELS } from '../../types';
+import { BrainDumpItem, BujoEntry, BujoType, EnergyLevel, ENERGY_LEVELS, SpaceItem } from '../../types';
 import { soundEngine } from '../../utils/audioSynth';
 import { getTodayKey } from '../../utils/dateUtils';
 import { DEFAULT_JOURNAL_CATEGORIES } from '../../utils/storage';
 import { useI18n, getCategoryLabel, getEnergyLabel, toPersianDigits } from '../../utils/i18n';
 import { MaterialExpressiveDatePicker } from '../common/MaterialExpressiveDatePicker';
 import { MaterialExpressiveTimePicker } from '../common/MaterialExpressiveTimePicker';
+import { SpaceItemPicker } from '../common/SpaceItemPicker';
 
 interface SendToJournalModalProps {
   item: BrainDumpItem | null;
@@ -24,6 +25,7 @@ interface SendToJournalModalProps {
   onConfirm: (entryData: Partial<BujoEntry>) => void;
   currentEnergy?: EnergyLevel;
   categories?: string[];
+  spaceItems?: SpaceItem[];
   onOpenSettings?: () => void;
 }
 
@@ -34,6 +36,7 @@ export const SendToJournalModal: React.FC<SendToJournalModalProps> = ({
   onConfirm,
   currentEnergy = 'low',
   categories,
+  spaceItems = [],
   onOpenSettings,
 }) => {
   const { t, language } = useI18n();
@@ -54,6 +57,7 @@ export const SendToJournalModal: React.FC<SendToJournalModalProps> = ({
   const [energyCost, setEnergyCost] = useState<EnergyLevel>(currentEnergy);
   const [isPriority, setIsPriority] = useState(false);
   const [category, setCategory] = useState<string>(availableCategories[0] || 'General');
+  const [linkedItemId, setLinkedItemId] = useState<string | undefined>(undefined);
 
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -65,6 +69,7 @@ export const SendToJournalModal: React.FC<SendToJournalModalProps> = ({
       setTargetTime('');
       setDurationMinutes('');
       setEnergyCost(currentEnergy);
+      setLinkedItemId(undefined);
 
       // Guess a sensible initial type from keywords
       const text = item.content.toLowerCase();
@@ -105,6 +110,7 @@ export const SendToJournalModal: React.FC<SendToJournalModalProps> = ({
       isPriority: isPriority,
       category: category.trim() || availableCategories[0] || 'General',
       tags: [category.trim() || availableCategories[0] || 'General'],
+      linkedItemId: linkedItemId || undefined,
     });
 
     onClose();
@@ -417,6 +423,13 @@ export const SendToJournalModal: React.FC<SendToJournalModalProps> = ({
             </div>
           </div>
         </div>
+
+        {/* Work / Study Item Assignment */}
+        <SpaceItemPicker
+          spaceItems={spaceItems}
+          selectedItemId={linkedItemId}
+          onChange={setLinkedItemId}
+        />
 
         {/* Modal Actions */}
         <div className="flex items-center justify-end gap-2 pt-3 border-t border-[#DCEAD4] dark:border-[#263722]">

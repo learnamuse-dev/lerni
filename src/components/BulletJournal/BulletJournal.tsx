@@ -26,9 +26,11 @@ import {
   ChevronDown,
   X,
   Eye,
-  EyeOff
+  EyeOff,
+  Briefcase,
+  GraduationCap
 } from 'lucide-react';
-import { BujoEntry, BujoType, BujoStatus, EnergyLevel, ENERGY_LEVELS, JournalCardFields, DEFAULT_JOURNAL_CARD_FIELDS, UserPreferences } from '../../types';
+import { BujoEntry, BujoType, BujoStatus, EnergyLevel, ENERGY_LEVELS, JournalCardFields, DEFAULT_JOURNAL_CARD_FIELDS, UserPreferences, SpaceItem, WorkStudySpace } from '../../types';
 import { storage } from '../../utils/storage';
 import { soundEngine } from '../../utils/audioSynth';
 import { 
@@ -58,6 +60,7 @@ interface BulletJournalProps {
   cardFields?: JournalCardFields;
   onUpdateCardFields?: (fields: JournalCardFields) => void;
   prefs?: UserPreferences;
+  spaceItems?: SpaceItem[];
 }
 
 const TYPE_SYMBOLS: Record<BujoType, { symbol: string; label: string; icon: React.ReactNode }> = {
@@ -77,6 +80,7 @@ export const BulletJournal: React.FC<BulletJournalProps> = ({
   cardFields,
   onUpdateCardFields,
   prefs,
+  spaceItems = [],
 }) => {
   const { t, language } = useI18n();
   const [localCardFields, setLocalCardFields] = useState<JournalCardFields>(cardFields || DEFAULT_JOURNAL_CARD_FIELDS);
@@ -169,7 +173,22 @@ export const BulletJournal: React.FC<BulletJournalProps> = ({
   // Filter state
   const [activeFilter, setActiveFilter] = useState<'all' | 'task' | 'note' | 'event' | 'priority'>('all');
   const [filterEnergy, setFilterEnergy] = useState<EnergyLevel | null>(null);
+  const [filterSpace, setFilterSpace] = useState<'all' | WorkStudySpace>('all');
+  const [filterSpaceItemId, setFilterSpaceItemId] = useState<string | null>(null);
   const [isFilterExpanded, setIsFilterExpanded] = useState(false);
+
+  const spaceItemMap = useMemo(() => {
+    const map = new Map<string, SpaceItem>();
+    for (const item of spaceItems) {
+      map.set(item.id, item);
+    }
+    return map;
+  }, [spaceItems]);
+
+  const filterableSpaceItems = useMemo(() => {
+    if (filterSpace === 'all') return spaceItems;
+    return spaceItems.filter((item) => item.space === filterSpace);
+  }, [spaceItems, filterSpace]);
 
   const handleSelectDate = (dateStr: string) => {
     setSelectedDate(dateStr);
@@ -321,6 +340,11 @@ export const BulletJournal: React.FC<BulletJournalProps> = ({
     if (activeFilter === 'event' && e.type !== 'event') return false;
     if (activeFilter === 'priority' && !e.isPriority) return false;
     if (filterEnergy !== null && e.energyCost !== filterEnergy) return false;
+    if (filterSpace !== 'all') {
+      const linked = e.linkedItemId ? spaceItemMap.get(e.linkedItemId) : undefined;
+      if (!linked || linked.space !== filterSpace) return false;
+    }
+    if (filterSpaceItemId !== null && e.linkedItemId !== filterSpaceItemId) return false;
     return true;
   });
 
@@ -588,6 +612,83 @@ export const BulletJournal: React.FC<BulletJournalProps> = ({
                   </div>
                 </div>
 
+                {/* Row 2.5: Work / Study Space & Item Filter */}
+                {spaceItems.length > 0 && (
+                  <div className="pt-2.5 border-t border-[#DCEAD4]/70 dark:border-[#263722]/70 space-y-2">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {[
+                        { id: 'all', label: t('journal.filterSpaceAll', 'All Spaces') },
+                        { id: 'work', label: t('journal.filterSpaceWork', 'Work'), icon: Briefcase },
+                        { id: 'study', label: t('journal.filterSpaceStudy', 'Study'), icon: GraduationCap },
+                      ].map((tab) => {
+                        const SpaceTabIcon = tab.icon;
+                        const isActive = filterSpace === tab.id;
+                        return (
+                          <button
+                            key={tab.id}
+                            type="button"
+                            onClick={() => {
+                              soundEngine.playPop();
+                              const nextSpace = tab.id as 'all' | WorkStudySpace;
+                              setFilterSpace(nextSpace);
+                              if (filterSpaceItemId) {
+                                const cur = spaceItemMap.get(filterSpaceItemId);
+                                if (!cur || (nextSpace !== 'all' && cur.space !== nextSpace)) {
+                                  setFilterSpaceItemId(null);
+                                }
+                              }
+                            }}
+                            className={`px-3 py-1 rounded-full text-xs font-bold inline-flex items-center gap-1.5 whitespace-nowrap transition-all cursor-pointer ${
+                              isActive
+                                ? 'bg-[#80D141] text-[#0F2600] shadow-xs'
+                                : 'bg-[#EDF6E8] dark:bg-[#1C281A] text-[#485B44] dark:text-[#9EB598] hover:bg-[#E8F8D8]'
+                            }`}
+                          >
+                            {SpaceTabIcon && <SpaceTabIcon className="w-3.5 h-3.5" />}
+                            <span>{tab.label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {filterableSpaceItems.length > 0 && (
+                      <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
+                        {filterableSpaceItems.map((item) => {
+                          const isSelected = filterSpaceItemId === item.id;
+                          const ItemIcon = item.space === 'work' ? Briefcase : GraduationCap;
+                          return (
+                            <button
+                              key={item.id}
+                              type="button"
+                              onClick={() => {
+                                soundEngine.playPop();
+                                setFilterSpaceItemId(isSelected ? null : item.id);
+                              }}
+                              className={`px-2.5 py-1 rounded-xl text-xs font-bold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-all cursor-pointer ${
+                                isSelected
+                                  ? 'bg-[#80D141] text-[#0F2600] shadow-2xs'
+                                  : 'bg-[#F6FBF3] dark:bg-[#1C281A] text-[#151E14] dark:text-[#E8F2E4] border border-[#DCEAD4] dark:border-[#263722] hover:bg-[#EDF6E8]'
+                              }`}
+                            >
+                              <span
+                                className="w-2 h-2 rounded-full shrink-0"
+                                style={{
+                                  backgroundColor: isSelected
+                                    ? '#0F2600'
+                                    : item.color || (item.space === 'work' ? '#80D141' : '#3B82F6'),
+                                }}
+                                aria-hidden="true"
+                              />
+                              <ItemIcon className="w-3 h-3 opacity-80 shrink-0" />
+                              <span>{item.title}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {/* Row 3: Card Field Visibility Controls */}
                 <div className="pt-2.5 border-t border-[#DCEAD4]/70 dark:border-[#263722]/70 flex flex-wrap items-center justify-between gap-2.5">
                   <div className="flex items-center gap-1.5 flex-wrap">
@@ -601,6 +702,7 @@ export const BulletJournal: React.FC<BulletJournalProps> = ({
                         { key: 'energy', label: t('cardFields.energy') },
                         { key: 'time', label: t('cardFields.time') },
                         { key: 'category', label: t('cardFields.category') },
+                        { key: 'linkedItem', label: t('cardFields.linkedItem') },
                         { key: 'priority', label: t('cardFields.priority') },
                         { key: 'steps', label: t('cardFields.steps') },
                       ] as { key: keyof JournalCardFields; label: string }[]
@@ -638,6 +740,7 @@ export const BulletJournal: React.FC<BulletJournalProps> = ({
                           energy: true,
                           time: true,
                           category: true,
+                          linkedItem: true,
                           priority: true,
                           steps: true,
                         });
@@ -659,6 +762,7 @@ export const BulletJournal: React.FC<BulletJournalProps> = ({
                           energy: false,
                           time: false,
                           category: false,
+                          linkedItem: false,
                           priority: false,
                           steps: false,
                         });
@@ -892,6 +996,7 @@ export const BulletJournal: React.FC<BulletJournalProps> = ({
         prefs={effectivePrefs}
         defaultDate={selectedDate}
         categories={categories}
+        spaceItems={spaceItems}
         onSaveJournalEntry={handleAddEntry}
         onOpenManualJournal={(draft) => {
           setIsVoiceAddOpen(false);
@@ -914,6 +1019,7 @@ export const BulletJournal: React.FC<BulletJournalProps> = ({
         categories={categories}
         onOpenSettings={onOpenSettings}
         initialDraft={manualDraft}
+        spaceItems={spaceItems}
       />
 
       {/* Edit Bujo Entry Modal */}
@@ -926,6 +1032,7 @@ export const BulletJournal: React.FC<BulletJournalProps> = ({
         }}
         categories={categories}
         onOpenSettings={onOpenSettings}
+        spaceItems={spaceItems}
       />
 
       {/* Unstick AI Modal */}
@@ -951,6 +1058,7 @@ export const BulletJournal: React.FC<BulletJournalProps> = ({
         onMigrateEntries={handleMigrateEntries}
         onCompleteEntry={handleToggleStatus}
         onDeleteEntry={handleDeleteEntry}
+        spaceItems={spaceItems}
       />
 
     </div>
@@ -965,17 +1073,22 @@ export const BulletJournal: React.FC<BulletJournalProps> = ({
     const microSteps = entry.microSteps || [];
     const completedMicroStepsCount = microSteps.filter((s) => s.completed).length;
     const energyMeta = ENERGY_LEVELS.find((l) => l.id === entry.energyCost) || ENERGY_LEVELS[0];
+    const linkedSpaceItem = entry.linkedItemId ? spaceItemMap.get(entry.linkedItemId) : undefined;
+    const LinkedSpaceIcon = linkedSpaceItem?.space === 'work' ? Briefcase : GraduationCap;
+    const linkedFieldEnabled = effectiveCardFields.linkedItem ?? true;
 
     const showPriorityInSummary = effectiveCardFields.priority && Boolean(entry.isPriority);
     const showStepsInSummary = effectiveCardFields.steps && microSteps.length > 0;
     const showEnergyInSummary = effectiveCardFields.energy;
     const showDateInSummary = Boolean(entry.date && journalView === 'timeline' && !allJournalFieldsHidden);
     const showCategoryInSummary = effectiveCardFields.category && Boolean(entry.category);
+    const showLinkedItemInSummary = linkedFieldEnabled && Boolean(linkedSpaceItem);
     const showTimeInSummary = effectiveCardFields.time && Boolean(entry.time || entry.durationMinutes);
     const hasSummaryMetaRow =
       showEnergyInSummary ||
       showDateInSummary ||
       showCategoryInSummary ||
+      showLinkedItemInSummary ||
       showTimeInSummary ||
       isOverdue ||
       isMigrated;
@@ -984,10 +1097,11 @@ export const BulletJournal: React.FC<BulletJournalProps> = ({
     const hiddenPriority = !effectiveCardFields.priority && Boolean(entry.isPriority);
     const hiddenEnergy = !effectiveCardFields.energy;
     const hiddenCategory = !effectiveCardFields.category && Boolean(entry.category);
+    const hiddenLinkedItem = !linkedFieldEnabled && Boolean(linkedSpaceItem);
     const hiddenTime = !effectiveCardFields.time && Boolean(entry.time || entry.durationMinutes);
     const hiddenSteps = !effectiveCardFields.steps && microSteps.length > 0;
     const hasHiddenExpandedMeta =
-      hiddenPriority || hiddenEnergy || hiddenCategory || hiddenTime || hiddenSteps;
+      hiddenPriority || hiddenEnergy || hiddenCategory || hiddenLinkedItem || hiddenTime || hiddenSteps;
 
     return (
       <motion.div
@@ -1096,6 +1210,22 @@ export const BulletJournal: React.FC<BulletJournalProps> = ({
                     </span>
                   )}
 
+                  {showLinkedItemInSummary && linkedSpaceItem && (
+                    <span className="inline-flex items-center gap-1.5 font-semibold text-[#151E14] dark:text-[#E8F2E4]">
+                      <span
+                        className="w-2 h-2 rounded-full shrink-0"
+                        style={{
+                          backgroundColor:
+                            linkedSpaceItem.color ||
+                            (linkedSpaceItem.space === 'work' ? '#80D141' : '#3B82F6'),
+                        }}
+                        aria-hidden="true"
+                      />
+                      <LinkedSpaceIcon className="w-3 h-3 opacity-80 shrink-0" />
+                      <span>{linkedSpaceItem.title}</span>
+                    </span>
+                  )}
+
                   {/* Scheduled Time & Duration Badge */}
                   {showTimeInSummary && (
                     <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold inline-flex items-center gap-1 shrink-0 ${
@@ -1170,7 +1300,7 @@ export const BulletJournal: React.FC<BulletJournalProps> = ({
                 {/* Hidden Fields Revealed on Expand */}
                 {hasHiddenExpandedMeta && (
                   <div className="space-y-1.5">
-                    {(hiddenPriority || hiddenEnergy || hiddenCategory || hiddenTime) && (
+                    {(hiddenPriority || hiddenEnergy || hiddenCategory || hiddenLinkedItem || hiddenTime) && (
                       <div className="flex items-center gap-2 flex-wrap text-xs font-medium text-[#485B44] dark:text-[#9EB598]">
                         {hiddenPriority && (
                           <span className="inline-flex items-center gap-1 font-bold text-[#B3261E] dark:text-[#F2B8B5]">
@@ -1178,7 +1308,7 @@ export const BulletJournal: React.FC<BulletJournalProps> = ({
                             <span>{t('journal.priority')}</span>
                           </span>
                         )}
-                        {hiddenPriority && (hiddenEnergy || hiddenCategory || hiddenTime) && (
+                        {hiddenPriority && (hiddenEnergy || hiddenCategory || hiddenLinkedItem || hiddenTime) && (
                           <span aria-hidden="true" className="opacity-50">·</span>
                         )}
                         {hiddenEnergy && (
@@ -1187,7 +1317,7 @@ export const BulletJournal: React.FC<BulletJournalProps> = ({
                             <span>{getEnergyLabel(energyMeta.id, language)}</span>
                           </span>
                         )}
-                        {hiddenEnergy && (hiddenCategory || hiddenTime) && (
+                        {hiddenEnergy && (hiddenCategory || hiddenLinkedItem || hiddenTime) && (
                           <span aria-hidden="true" className="opacity-50">·</span>
                         )}
                         {hiddenCategory && (
@@ -1195,7 +1325,25 @@ export const BulletJournal: React.FC<BulletJournalProps> = ({
                             {getCategoryLabel(entry.category!, language)}
                           </span>
                         )}
-                        {hiddenCategory && hiddenTime && (
+                        {hiddenCategory && (hiddenLinkedItem || hiddenTime) && (
+                          <span aria-hidden="true" className="opacity-50">·</span>
+                        )}
+                        {hiddenLinkedItem && linkedSpaceItem && (
+                          <span className="inline-flex items-center gap-1.5 font-semibold text-[#151E14] dark:text-[#E8F2E4]">
+                            <span
+                              className="w-2 h-2 rounded-full shrink-0"
+                              style={{
+                                backgroundColor:
+                                  linkedSpaceItem.color ||
+                                  (linkedSpaceItem.space === 'work' ? '#80D141' : '#3B82F6'),
+                              }}
+                              aria-hidden="true"
+                            />
+                            <LinkedSpaceIcon className="w-3 h-3 opacity-80 shrink-0" />
+                            <span>{linkedSpaceItem.title}</span>
+                          </span>
+                        )}
+                        {hiddenLinkedItem && hiddenTime && (
                           <span aria-hidden="true" className="opacity-50">·</span>
                         )}
                         {hiddenTime && (

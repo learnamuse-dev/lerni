@@ -16,6 +16,7 @@ import {
   BujoEntry,
   Habit,
   UserPreferences,
+  SpaceItem,
   hasActiveAiKey,
 } from '../../types';
 import {
@@ -34,6 +35,7 @@ import {
   toPersianDigits,
   formatMinutes,
 } from '../../utils/i18n';
+import { SpaceItemPicker } from './SpaceItemPicker';
 
 interface VoiceEntryModalProps {
   isOpen: boolean;
@@ -42,6 +44,7 @@ interface VoiceEntryModalProps {
   prefs: UserPreferences;
   defaultDate?: string;
   categories?: string[];
+  spaceItems?: SpaceItem[];
   onSaveJournalEntry?: (entry: BujoEntry) => void;
   onOpenManualJournal?: (draft: Partial<BujoEntry>) => void;
   onSaveHabit?: (habit: Habit) => void;
@@ -56,6 +59,7 @@ export const VoiceEntryModal: React.FC<VoiceEntryModalProps> = ({
   prefs,
   defaultDate,
   categories,
+  spaceItems = [],
   onSaveJournalEntry,
   onOpenManualJournal,
   onSaveHabit,
@@ -331,6 +335,7 @@ export const VoiceEntryModal: React.FC<VoiceEntryModalProps> = ({
           todayDate: todayStr,
           defaultDate: defaultDate || todayStr,
           categories: availableCategories,
+          spaceItems,
           prefs,
         });
         setJournalDraft(parsed);
@@ -371,6 +376,7 @@ export const VoiceEntryModal: React.FC<VoiceEntryModalProps> = ({
         isPriority: journalDraft.isPriority,
         category: journalDraft.category,
         tags: [journalDraft.category],
+        linkedItemId: journalDraft.linkedItemId,
         createdAt: Date.now(),
       };
       onSaveJournalEntry(entry);
@@ -412,6 +418,7 @@ export const VoiceEntryModal: React.FC<VoiceEntryModalProps> = ({
           energyCost: journalDraft.energyCost,
           isPriority: journalDraft.isPriority,
           category: journalDraft.category,
+          linkedItemId: journalDraft.linkedItemId,
         });
       } else {
         onOpenManualJournal({
@@ -791,6 +798,20 @@ export const VoiceEntryModal: React.FC<VoiceEntryModalProps> = ({
                           </div>
                         </div>
                       </div>
+
+                      {spaceItems.length > 0 && (
+                        <div className="pt-3 border-t border-[#DCEAD4] dark:border-[#263722]">
+                          <SpaceItemPicker
+                            spaceItems={spaceItems}
+                            selectedItemId={journalDraft.linkedItemId}
+                            onChange={(nextId) =>
+                              setJournalDraft((prev) =>
+                                prev ? { ...prev, linkedItemId: nextId } : prev
+                              )
+                            }
+                          />
+                        </div>
+                      )}
                     </div>
                   )}
 

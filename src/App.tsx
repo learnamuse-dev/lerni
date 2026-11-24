@@ -6,21 +6,22 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Plus, Sparkles, Loader2 } from 'lucide-react';
-import { Habit, BujoEntry, FocusSession, UserPreferences, BrainDumpItem, ActiveSection, DEFAULT_NAV_ORDER, hasActiveAiKey } from './types';
+import { Habit, BujoEntry, FocusSession, UserPreferences, BrainDumpItem, ActiveSection, DEFAULT_NAV_ORDER, hasActiveAiKey, SpaceItem } from './types';
 import { storage, getTodayDateString } from './utils/storage';
 import { soundEngine } from './utils/audioSynth';
 import { applyThemeToDocument, DEFAULT_ACCENT_COLOR } from './utils/themeColors';
 import { I18nProvider, isRTL } from './utils/i18n';
-import { Header } from './components/Header';
 import { Navigation } from './components/Navigation';
 import { BrainDump } from './components/BrainDump/BrainDump';
 import { HabitTracker } from './components/HabitTracker/HabitTracker';
 import { BulletJournal } from './components/BulletJournal/BulletJournal';
 import { Planner } from './components/Planner/Planner';
 import { FocusTracker } from './components/FocusTracker/FocusTracker';
+import { SpaceItemsView } from './components/Spaces/SpaceItemsView';
 import { SettingsSection } from './components/SettingsSection';
 import { ParalysisBusterModal } from './components/ParalysisBusterModal';
 import { GroundingModal } from './components/GroundingModal';
+import { EnergyStatusModal } from './components/EnergyStatusModal';
 
 export default function App() {
   const [prefs, setPrefs] = useState<UserPreferences>(() => storage.getPreferences());
@@ -28,6 +29,7 @@ export default function App() {
   const [habits, setHabits] = useState<Habit[]>(() => storage.getHabits());
   const [bujoEntries, setBujoEntries] = useState<BujoEntry[]>(() => storage.getBujoEntries());
   const [focusSessions, setFocusSessions] = useState<FocusSession[]>(() => storage.getFocusSessions());
+  const [spaceItems, setSpaceItems] = useState<SpaceItem[]>(() => storage.getSpaceItems());
 
   const [activeSection, setActiveSection] = useState<ActiveSection>(() => {
     const saved = storage.getPreferences();
@@ -101,6 +103,7 @@ export default function App() {
       isPriority: entry.isPriority || false,
       createdAt: Date.now(),
       tags: entry.tags || (entry.category ? [entry.category] : []),
+      linkedItemId: entry.linkedItemId,
     };
     handleUpdateBujoEntries([newEntry, ...bujoEntries]);
   };
@@ -118,6 +121,30 @@ export default function App() {
   const handleUpdateBujoEntries = (newEntries: BujoEntry[]) => {
     setBujoEntries(newEntries);
     storage.saveBujoEntries(newEntries);
+  };
+
+  const handleUpdateSpaceItems = (newItems: SpaceItem[]) => {
+    setSpaceItems(newItems);
+    storage.saveSpaceItems(newItems);
+  };
+
+  const handleAddSpaceItem = (item: SpaceItem) => {
+    handleUpdateSpaceItems([item, ...spaceItems]);
+  };
+
+  const handleUpdateSingleSpaceItem = (updated: SpaceItem) => {
+    handleUpdateSpaceItems(spaceItems.map((item) => (item.id === updated.id ? updated : item)));
+  };
+
+  const handleDeleteSpaceItem = (id: string) => {
+    handleUpdateSpaceItems(spaceItems.filter((item) => item.id !== id));
+    if (bujoEntries.some((entry) => entry.linkedItemId === id)) {
+      handleUpdateBujoEntries(
+        bujoEntries.map((entry) =>
+          entry.linkedItemId === id ? { ...entry, linkedItemId: undefined } : entry
+        )
+      );
+    }
   };
 
   const handleAddFocusSession = (session: FocusSession) => {
@@ -147,6 +174,7 @@ export default function App() {
     setHabits(storage.getHabits());
     setBujoEntries(storage.getBujoEntries());
     setFocusSessions(storage.getFocusSessions());
+    setSpaceItems(storage.getSpaceItems());
     setDataVersion((prev) => prev + 1);
   };
 
@@ -179,6 +207,20 @@ export default function App() {
           icon: <Plus className="w-6 h-6 stroke-[2.5]" />,
           iconKey: 'plus',
         };
+      case 'work':
+        return {
+          id: 'fab-add-work-item',
+          label: lang === 'fa' ? 'مورد کاری جدید' : 'New Work Item',
+          icon: <Plus className="w-6 h-6 stroke-[2.5]" />,
+          iconKey: 'plus',
+        };
+      case 'study':
+        return {
+          id: 'fab-add-study-item',
+          label: lang === 'fa' ? 'مورد مطالعاتی جدید' : 'New Study Item',
+          icon: <Plus className="w-6 h-6 stroke-[2.5]" />,
+          iconKey: 'plus',
+        };
       case 'braindump':
         return {
           id: 'fab-add-thought',
@@ -204,31 +246,23 @@ export default function App() {
       onLanguageChange={(lang) => handleUpdatePrefs({ language: lang })}
     >
       <div className={`min-h-screen transition-colors duration-300 ${prefs.theme === 'dark' ? 'dark bg-[#121B11] text-[#E8F2E4]' : 'bg-[#F4F7F1] text-[#151E14]'}`}>
-        
-        {/* Material Expressive Geometric Top Bar with Lerni Mascot */}
-        <Header
-          prefs={prefs}
-          onUpdatePrefs={handleUpdatePrefs}
-          onOpenParalysisBuster={() => setIsParalysisOpen(true)}
-          onOpenGrounding={() => setIsGroundingOpen(true)}
-          onOpenSettings={handleOpenSettings}
-          activeSection={activeSection}
-          isStatusOpen={isStatusModalOpen}
-          onOpenStatus={() => setIsStatusModalOpen(true)}
-          onCloseStatus={() => setIsStatusModalOpen(false)}
-        />
-
         {/* Main Workspace Layout with Desktop Navigation Rail & Content Area */}
         <div className="flex-1 md:flex w-full">
           <Navigation
             activeSection={activeSection}
             onChangeSection={setActiveSection}
+            onOpenSettings={handleOpenSettings}
             isFocusRunning={isFocusRunning}
             navOrder={prefs.navOrder || DEFAULT_NAV_ORDER}
+            currentEnergy={prefs.currentEnergy}
+            sensoryState={prefs.sensoryState}
+            onOpenStatus={() => setIsStatusModalOpen(true)}
+            onOpenParalysisBuster={() => setIsParalysisOpen(true)}
+            onOpenGrounding={() => setIsGroundingOpen(true)}
           />
 
           {/* Main Content Area */}
-          <main id="main-content" className="flex-1 min-w-0 relative pt-4 sm:pt-6 pb-36 sm:pb-32 md:pb-24">
+          <main id="main-content" className="flex-1 min-w-0 relative pt-[max(env(safe-area-inset-top),1rem)] sm:pt-6 pb-36 sm:pb-32 md:pb-24">
             <AnimatePresence mode="wait">
               {activeSection === 'planner' && (
                 <motion.div
@@ -273,6 +307,7 @@ export default function App() {
                     cardFields={prefs.journalCardFields}
                     onUpdateCardFields={(journalCardFields) => handleUpdatePrefs({ journalCardFields })}
                     prefs={prefs}
+                    spaceItems={spaceItems}
                   />
                 </motion.div>
               )}
@@ -297,6 +332,44 @@ export default function App() {
                 </motion.div>
               )}
 
+              {activeSection === 'work' && (
+                <motion.div
+                  key="work"
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -10 }}
+                  transition={{ duration: 0.2 }}
+                >
+                  <SpaceItemsView
+                    space="work"
+                    items={spaceItems}
+                    bujoEntries={bujoEntries}
+                    onAddItem={handleAddSpaceItem}
+                    onUpdateItem={handleUpdateSingleSpaceItem}
+                    onDeleteItem={handleDeleteSpaceItem}
+                  />
+                </motion.div>
+              )}
+
+              {activeSection === 'study' && (
+                <motion.div
+                  key="study"
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -10 }}
+                  transition={{ duration: 0.2 }}
+                >
+                  <SpaceItemsView
+                    space="study"
+                    items={spaceItems}
+                    bujoEntries={bujoEntries}
+                    onAddItem={handleAddSpaceItem}
+                    onUpdateItem={handleUpdateSingleSpaceItem}
+                    onDeleteItem={handleDeleteSpaceItem}
+                  />
+                </motion.div>
+              )}
+
               {activeSection === 'braindump' && (
                 <motion.div
                   key="braindump"
@@ -317,6 +390,7 @@ export default function App() {
                     categories={prefs.journalCategories}
                     onOpenSettings={handleOpenSettings}
                     hasApiKey={hasActiveAiKey(prefs)}
+                    spaceItems={spaceItems}
                   />
                 </motion.div>
               )}
@@ -420,6 +494,13 @@ export default function App() {
         <GroundingModal
           isOpen={isGroundingOpen}
           onClose={() => setIsGroundingOpen(false)}
+        />
+
+        <EnergyStatusModal
+          isOpen={isStatusModalOpen}
+          onClose={() => setIsStatusModalOpen(false)}
+          prefs={prefs}
+          onUpdatePrefs={handleUpdatePrefs}
         />
 
       </div>

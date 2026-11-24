@@ -11,13 +11,14 @@ import {
   Settings,
   ArrowLeft
 } from 'lucide-react';
-import { BujoEntry, BujoType, EnergyLevel, ENERGY_LEVELS } from '../../types';
+import { BujoEntry, BujoType, EnergyLevel, ENERGY_LEVELS, SpaceItem } from '../../types';
 import { soundEngine } from '../../utils/audioSynth';
 import { getTodayKey } from '../../utils/dateUtils';
 import { DEFAULT_JOURNAL_CATEGORIES } from '../../utils/storage';
 import { useI18n, getCategoryLabel, getEnergyLabel, toPersianDigits } from '../../utils/i18n';
 import { MaterialExpressiveDatePicker } from '../common/MaterialExpressiveDatePicker';
 import { MaterialExpressiveTimePicker } from '../common/MaterialExpressiveTimePicker';
+import { SpaceItemPicker } from '../common/SpaceItemPicker';
 
 interface AddBujoModalProps {
   isOpen: boolean;
@@ -26,6 +27,7 @@ interface AddBujoModalProps {
   defaultDate: string;
   currentEnergy?: EnergyLevel;
   categories?: string[];
+  spaceItems?: SpaceItem[];
   onOpenSettings?: () => void;
   initialDraft?: Partial<BujoEntry> | null;
 }
@@ -43,6 +45,7 @@ export const AddBujoModal: React.FC<AddBujoModalProps> = ({
   defaultDate,
   currentEnergy = 'low',
   categories,
+  spaceItems = [],
   onOpenSettings,
   initialDraft,
 }) => {
@@ -58,6 +61,7 @@ export const AddBujoModal: React.FC<AddBujoModalProps> = ({
   const [energyCost, setEnergyCost] = useState<EnergyLevel>(currentEnergy);
   const [isPriority, setIsPriority] = useState(false);
   const [category, setCategory] = useState<string>(availableCategories[0] || 'General');
+  const [linkedItemId, setLinkedItemId] = useState<string | undefined>(undefined);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const wasOpenRef = useRef(false);
@@ -72,6 +76,7 @@ export const AddBujoModal: React.FC<AddBujoModalProps> = ({
       setType(initialDraft?.type || 'task');
       setEnergyCost(initialDraft?.energyCost || currentEnergy);
       setIsPriority(Boolean(initialDraft?.isPriority));
+      setLinkedItemId(initialDraft?.linkedItemId);
       const draftCat = initialDraft?.category;
       if (draftCat && availableCategories.includes(draftCat)) {
         setCategory(draftCat);
@@ -121,6 +126,7 @@ export const AddBujoModal: React.FC<AddBujoModalProps> = ({
       isPriority: isPriority,
       category: category.trim() || availableCategories[0] || 'General',
       tags: [category.trim() || availableCategories[0] || 'General'],
+      linkedItemId: linkedItemId || undefined,
       createdAt: Date.now(),
     };
 
@@ -454,6 +460,13 @@ export const AddBujoModal: React.FC<AddBujoModalProps> = ({
             </div>
           </div>
         </div>
+
+        {/* Work / Study Item Assignment */}
+        <SpaceItemPicker
+          spaceItems={spaceItems}
+          selectedItemId={linkedItemId}
+          onChange={setLinkedItemId}
+        />
 
       </div>
     </div>

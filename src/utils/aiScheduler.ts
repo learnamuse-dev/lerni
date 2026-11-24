@@ -13,6 +13,7 @@ import {
   SensoryState,
   SchedulingConstraint,
   AiProvider,
+  SpaceItem,
   DEFAULT_OPENROUTER_MODEL,
   DEFAULT_CUSTOM_OPENAI_BASE_URL,
   DEFAULT_CUSTOM_OPENAI_MODEL,
@@ -1408,6 +1409,7 @@ export interface ParsedVoiceBujoDraft {
   energyCost: EnergyLevel;
   isPriority: boolean;
   category: string;
+  linkedItemId?: string;
 }
 
 export interface ParsedVoiceHabitDraft {
@@ -1501,6 +1503,7 @@ export async function parseVoiceToBujoEntry(
     todayDate: string;
     defaultDate: string;
     categories: string[];
+    spaceItems?: SpaceItem[];
     prefs: UserPreferences;
   }
 ): Promise<ParsedVoiceBujoDraft> {
@@ -1509,11 +1512,23 @@ export async function parseVoiceToBujoEntry(
     throw new Error('EMPTY_TRANSCRIPT');
   }
 
-  const { todayDate, defaultDate, categories, prefs } = params;
+  const { todayDate, defaultDate, categories, spaceItems = [], prefs } = params;
   const availableCategories = categories.length > 0 ? categories : ['General'];
   const tomorrowDate = shiftDate(todayDate, 1);
   const dayAfterDate = shiftDate(todayDate, 2);
   const todayWeekday = new Date(`${todayDate}T12:00:00`).toLocaleDateString('en-US', { weekday: 'long' });
+
+  const compactSpaceItems = spaceItems.map((item) => ({
+    id: item.id,
+    space: item.space,
+    title: item.title,
+    kind: item.kind || undefined,
+  }));
+
+  const linkedItemRule =
+    compactSpaceItems.length > 0
+      ? `\n9. "linkedItemId": If the speech clearly mentions or belongs to one of these user-defined Work/Study items, return its exact "id"; otherwise return null: ${JSON.stringify(compactSpaceItems)}.`
+      : `\n9. "linkedItemId": null.`;
 
   const systemInstruction = `You extract a single structured Bullet Journal entry from natural spoken speech (English or Persian/Farsi).
 Return ONLY valid JSON with these exact keys:
@@ -1525,7 +1540,8 @@ Return ONLY valid JSON with these exact keys:
   "durationMinutes": number or null,
   "energyCost": "low" | "medium" | "high",
   "isPriority": boolean,
-  "category": string
+  "category": string,
+  "linkedItemId": string or null
 }
 
 Rules:
@@ -1536,7 +1552,7 @@ Rules:
 5. "durationMinutes": Extract duration in minutes as an integer (e.g. "half an hour" -> 30, "نیم ساعت" -> 30, "25 mins" -> 25). Use null if unmentioned.
 6. "energyCost": Infer "low", "medium", or "high" from the speech or task difficulty. If unclear, default to "${prefs.currentEnergy || 'medium'}".
 7. "isPriority": true ONLY if the user indicates urgency, importance, priority, or starring (e.g. "urgent", "important", "priority", "مهم", "فوری").
-8. "category": Choose the closest matching category string EXACTLY from this list: ${JSON.stringify(availableCategories)}. Fallback to "${availableCategories[0]}".`;
+8. "category": Choose the closest matching category string EXACTLY from this list: ${JSON.stringify(availableCategories)}. Fallback to "${availableCategories[0]}".${linkedItemRule}`;
 
   const userPrompt = `Spoken transcript:\n"""\n${cleanTranscript}\n"""`;
 
@@ -1550,6 +1566,10 @@ Rules:
   const matchedCat =
     availableCategories.find((c) => c.toLowerCase() === String(parsed.category || '').trim().toLowerCase()) ||
     availableCategories[0];
+  const matchedSpaceItem =
+    typeof parsed.linkedItemId === 'string' && parsed.linkedItemId.trim()
+      ? spaceItems.find((s) => s.id === parsed.linkedItemId.trim())
+      : undefined;
 
   return {
     content: String(parsed.content || cleanTranscript).trim() || cleanTranscript,
@@ -1560,6 +1580,7 @@ Rules:
     energyCost: resolvedEnergy,
     isPriority: Boolean(parsed.isPriority),
     category: matchedCat,
+    linkedItemId: matchedSpaceItem?.id,
   };
 }
 

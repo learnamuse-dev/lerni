@@ -52,6 +52,18 @@ export interface MicroStep {
   tip?: string;
 }
 
+export type WorkStudySpace = 'work' | 'study';
+
+export interface SpaceItem {
+  id: string;
+  space: WorkStudySpace;
+  title: string;
+  kind?: string; // e.g. 'Course', 'Lecture', 'Job', 'Project'
+  notes?: string;
+  color?: string;
+  createdAt: number;
+}
+
 export interface BujoEntry {
   id: string;
   date: string; // YYYY-MM-DD
@@ -66,6 +78,7 @@ export interface BujoEntry {
   tags?: string[];
   microSteps?: MicroStep[];
   linkedHabitId?: string;
+  linkedItemId?: string; // Links entry to a Work or Study SpaceItem
   createdAt: number;
   completedAt?: number;
 }
@@ -136,7 +149,7 @@ export interface BrainDumpItem {
   isPinned?: boolean;
 }
 
-export type NavSection = 'planner' | 'journal' | 'habits' | 'focus' | 'braindump';
+export type NavSection = 'planner' | 'journal' | 'habits' | 'focus' | 'work' | 'study' | 'braindump';
 export type ActiveSection = NavSection | 'settings';
 export type Language = 'en' | 'fa';
 
@@ -145,6 +158,8 @@ export const DEFAULT_NAV_ORDER: NavSection[] = [
   'journal',
   'habits',
   'focus',
+  'work',
+  'study',
   'braindump'
 ];
 
@@ -283,6 +298,7 @@ export interface JournalCardFields {
   category: boolean;
   priority: boolean;
   steps: boolean;
+  linkedItem: boolean;
 }
 
 export interface HabitCardFields {
@@ -298,6 +314,7 @@ export const DEFAULT_JOURNAL_CARD_FIELDS: JournalCardFields = {
   category: true,
   priority: true,
   steps: true,
+  linkedItem: true,
 };
 
 export const DEFAULT_HABIT_CARD_FIELDS: HabitCardFields = {

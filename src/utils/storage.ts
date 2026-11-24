@@ -1,4 +1,4 @@
-import { Habit, BujoEntry, FocusSession, UserPreferences, BrainDumpItem, EnergyLevel, DEFAULT_NAV_ORDER, NavSection, DayPlan, Chronotype, Project, ProjectTask, TimeLog, ActiveTimeTrackerState, FocusTab, DEFAULT_FOCUS_TAB_ORDER, DEFAULT_JOURNAL_CARD_FIELDS, DEFAULT_HABIT_CARD_FIELDS, DEFAULT_OPENROUTER_MODEL } from '../types';
+import { Habit, BujoEntry, FocusSession, UserPreferences, BrainDumpItem, EnergyLevel, DEFAULT_NAV_ORDER, NavSection, DayPlan, Chronotype, Project, ProjectTask, TimeLog, ActiveTimeTrackerState, FocusTab, DEFAULT_FOCUS_TAB_ORDER, DEFAULT_JOURNAL_CARD_FIELDS, DEFAULT_HABIT_CARD_FIELDS, DEFAULT_OPENROUTER_MODEL, SpaceItem } from '../types';
 
 export const getTodayDateString = (): string => {
   const d = new Date();
@@ -297,6 +297,45 @@ const DEFAULT_TIME_LOGS: TimeLog[] = [
   }
 ];
 
+const DEFAULT_SPACE_ITEMS: SpaceItem[] = [
+  {
+    id: 'space-study-1',
+    space: 'study',
+    title: 'Cognitive Psychology',
+    kind: 'Course',
+    notes: 'Core course modules & weekly readings',
+    color: '#3B82F6',
+    createdAt: Date.now() - 86400000 * 6,
+  },
+  {
+    id: 'space-study-2',
+    space: 'study',
+    title: 'Algorithms & Data Structures',
+    kind: 'Lecture',
+    notes: 'Tuesday & Thursday morning lectures',
+    color: '#8B5CF6',
+    createdAt: Date.now() - 86400000 * 5,
+  },
+  {
+    id: 'space-work-1',
+    space: 'work',
+    title: 'Product Engineering',
+    kind: 'Job',
+    notes: 'Primary engineering role & sprint deliverables',
+    color: '#80D141',
+    createdAt: Date.now() - 86400000 * 4,
+  },
+  {
+    id: 'space-work-2',
+    space: 'work',
+    title: 'Client Website Refresh',
+    kind: 'Project',
+    notes: 'Design polish & launch checklist',
+    color: '#F59E0B',
+    createdAt: Date.now() - 86400000 * 3,
+  },
+];
+
 export const DEFAULT_JOURNAL_CATEGORIES = ['General', 'Personal', 'Work', 'Health', 'Errands', 'Home'];
 
 const DEFAULT_PREFERENCES: UserPreferences = {
@@ -337,7 +376,8 @@ const STORAGE_KEYS = {
   PROJECTS: 'lerni_projects_v1',
   PROJECT_TASKS: 'lerni_project_tasks_v1',
   TIME_LOGS: 'lerni_time_logs_v1',
-  ACTIVE_TRACKER: 'lerni_active_tracker_v1'
+  ACTIVE_TRACKER: 'lerni_active_tracker_v1',
+  SPACE_ITEMS: 'lerni_space_items_v1',
 };
 
 export const storage = {
@@ -620,6 +660,27 @@ export const storage = {
     }
   },
 
+  getSpaceItems: (): SpaceItem[] => {
+    try {
+      const data = localStorage.getItem(STORAGE_KEYS.SPACE_ITEMS);
+      if (!data) return DEFAULT_SPACE_ITEMS;
+      const parsed: any[] = JSON.parse(data);
+      return Array.isArray(parsed)
+        ? parsed.filter((item) => item && (item.space === 'work' || item.space === 'study') && typeof item.title === 'string')
+        : DEFAULT_SPACE_ITEMS;
+    } catch {
+      return DEFAULT_SPACE_ITEMS;
+    }
+  },
+
+  saveSpaceItems: (items: SpaceItem[]) => {
+    try {
+      localStorage.setItem(STORAGE_KEYS.SPACE_ITEMS, JSON.stringify(items));
+    } catch (e) {
+      console.error("Failed to save space items:", e);
+    }
+  },
+
   exportAllData: () => {
     return JSON.stringify({
       habits: storage.getHabits(),
@@ -629,6 +690,7 @@ export const storage = {
       projects: storage.getProjects(),
       projectTasks: storage.getProjectTasks(),
       timeLogs: storage.getTimeLogs(),
+      spaceItems: storage.getSpaceItems(),
       prefs: storage.getPreferences(),
       exportedAt: new Date().toISOString()
     }, null, 2);
@@ -648,6 +710,7 @@ export const storage = {
         'projects',
         'projectTasks',
         'timeLogs',
+        'spaceItems',
         'prefs',
       ];
       if (!recognizedKeys.some((k) => k in parsed)) {
@@ -660,6 +723,7 @@ export const storage = {
       if (Array.isArray(parsed.projects)) storage.saveProjects(parsed.projects);
       if (Array.isArray(parsed.projectTasks)) storage.saveProjectTasks(parsed.projectTasks);
       if (Array.isArray(parsed.timeLogs)) storage.saveTimeLogs(parsed.timeLogs);
+      if (Array.isArray(parsed.spaceItems)) storage.saveSpaceItems(parsed.spaceItems);
       if (parsed.prefs && typeof parsed.prefs === 'object' && !Array.isArray(parsed.prefs)) {
         storage.savePreferences(parsed.prefs);
       }
@@ -678,6 +742,7 @@ export const storage = {
     storage.saveProjects([]);
     storage.saveProjectTasks([]);
     storage.saveTimeLogs([]);
+    storage.saveSpaceItems([]);
     storage.saveActiveTimeTracker(null);
     try {
       localStorage.setItem(STORAGE_KEYS.PLANS, JSON.stringify({}));
@@ -721,6 +786,7 @@ export const storage = {
     storage.saveProjects(DEFAULT_PROJECTS);
     storage.saveProjectTasks(DEFAULT_PROJECT_TASKS);
     storage.saveTimeLogs(DEFAULT_TIME_LOGS);
+    storage.saveSpaceItems(DEFAULT_SPACE_ITEMS);
     storage.saveActiveTimeTracker(null);
 
     try {
